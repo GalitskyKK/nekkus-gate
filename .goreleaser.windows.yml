@@ -1,0 +1,30 @@
+project_name: nekkus-gate
+
+builds:
+  - id: nekkus-gate
+    main: ./cmd
+    binary: nekkus-gate
+    goos:
+      - windows
+    goarch:
+      - amd64
+    env:
+      - CGO_ENABLED=1
+    ldflags:
+      - -H windowsgui
+
+archives:
+  - id: default
+    format: zip
+    name_template: "{{ .ProjectName }}_{{ .Version }}_windows_amd64"
+    wrap_in_directory: com.nekkus.gate
+    files:
+      - src: release_assets/manifest.json
+        dst: .
+        strip_parent: true
+
+release:
+  github:
+    owner: GalitskyKK
+    name: nekkus-gate
+  name_template: "v{{ .Version }}"

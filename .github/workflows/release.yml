@@ -1,0 +1,102 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-22.04
+            goos: linux
+          - runner: windows-latest
+            goos: windows
+          - runner: macos-latest
+            goos: darwin
+    runs-on: ${{ matrix.runner }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install Linux deps
+        if: matrix.goos == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.0-dev pkg-config
+
+      - name: Build frontend
+        env:
+          VITE_OUT_DIR: dist
+          VITE_BUILD_ID: ${{ github.ref_name }}-${{ github.run_id }}
+        run: cd frontend && npm ci && npm run build
+
+      - name: Copy frontend dist for embed
+        run: mkdir -p ui/frontend && cp -r frontend/dist ui/frontend/
+
+      - name: Verify embed has frontend
+        run: |
+          test -f ui/frontend/dist/index.html || (echo "ui/frontend/dist missing index.html" && exit 1)
+          ls -la ui/frontend/dist/
+
+      - name: Generate manifest
+        run: |
+          VERSION="${{ github.ref_name }}"
+          VERSION="${VERSION#v}"
+          mkdir -p release_assets
+          sed "s/\"version\": \"0.0.0\"/\"version\": \"$VERSION\"/" manifest.json.template > release_assets/manifest.json
+
+      - name: Run GoReleaser
+        uses: goreleaser/goreleaser-action@v5
+        with:
+          version: latest
+          args: release --skip=publish --skip=validate --clean --config .goreleaser.${{ matrix.goos }}.yml
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload dist
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist-${{ matrix.goos }}
+          path: dist/
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all dist artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: dist-*
+          merge-multiple: true
+          path: dist
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          files: |
+            dist/*.tar.gz
+            dist/*.zip
+          draft: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
