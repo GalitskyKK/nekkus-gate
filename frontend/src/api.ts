@@ -1,0 +1,53 @@
+const BASE = ''
+
+export interface GateStats {
+  total_queries: number
+  blocked_today: number
+  blocked_total: number
+  blocked_percent: number
+  blocklist_count: number
+  timestamp: number
+}
+
+export interface TopBlockedEntry {
+  domain: string
+  count: number
+}
+
+export async function fetchStats(): Promise<GateStats> {
+  const res = await fetch(`${BASE}/api/stats`)
+  if (!res.ok) throw new Error(res.statusText)
+  return res.json()
+}
+
+export async function fetchTopBlocked(limit?: number): Promise<TopBlockedEntry[]> {
+  const url = limit != null ? `${BASE}/api/top_blocked?limit=${limit}` : `${BASE}/api/top_blocked`
+  const res = await fetch(url)
+  if (!res.ok) throw new Error(res.statusText)
+  return res.json()
+}
+
+export interface FilterStatus {
+  active: boolean
+  port: number
+}
+
+export async function fetchFilterStatus(): Promise<FilterStatus> {
+  const res = await fetch(`${BASE}/api/filter/status`)
+  if (!res.ok) throw new Error(res.statusText)
+  return res.json()
+}
+
+export async function enableFilter(): Promise<{ ok: boolean; active: boolean }> {
+  const res = await fetch(`${BASE}/api/filter/enable`, { method: 'POST' })
+  const data = await res.json()
+  if (!res.ok) throw new Error((data as { error?: string }).error || res.statusText)
+  return data
+}
+
+export async function disableFilter(): Promise<{ ok: boolean; active: boolean }> {
+  const res = await fetch(`${BASE}/api/filter/disable`, { method: 'POST' })
+  const data = await res.json()
+  if (!res.ok) throw new Error((data as { error?: string }).error || res.statusText)
+  return data
+}

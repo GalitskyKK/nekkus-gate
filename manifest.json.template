@@ -1,0 +1,1 @@
+{"id":"com.nekkus.gate","name":"Nekkus Gate","description":"DNS-level blocking: ads and trackers","version":"0.1.0","executable":{"windows":"nekkus-gate.exe","linux":"nekkus-gate","darwin":"nekkus-gate"},"grpc_addr":"127.0.0.1:19003","widget":{"type":"custom","component":"GateWidget","height":180,"update_interval":"3s","supports_resize":true},"config":{"storage_path":"data"}}

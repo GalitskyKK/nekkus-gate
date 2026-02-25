@@ -1,0 +1,12 @@
+bin/
+dist/
+release_assets/
+*.exe
+ui/frontend/dist/*
+!ui/frontend/dist/index.html
+node_modules/
+frontend/node_modules/
+frontend/dist/
+.DS_Store
+*.log
+manifest.json
