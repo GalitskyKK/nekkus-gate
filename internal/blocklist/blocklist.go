@@ -69,6 +69,17 @@ func (b *Blocklist) Count() int {
 	return len(b.set)
 }
 
+// All возвращает копию списка доменов (для экспорта в hosts и т.п.).
+func (b *Blocklist) All() []string {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	out := make([]string, 0, len(b.set))
+	for d := range b.set {
+		out = append(out, d)
+	}
+	return out
+}
+
 // Path возвращает путь к загруженному файлу (или пусто).
 func (b *Blocklist) Path() string {
 	b.mu.RLock()

@@ -1,9 +1,17 @@
 package sysdns
 
+import "runtime"
+
 // GetCurrent возвращает текущее состояние DNS системы (адаптер, DHCP или список серверов).
 // Нужно вызвать до Enable, чтобы сохранить в State и потом Restore.
 func GetCurrent() (*State, error) {
 	return getCurrent()
+}
+
+// SaveStateHostsMode сохраняет состояние с Mode=hosts (фильтр включён через файл hosts).
+// При Disable по этому состоянию восстанавливается только hosts, DNS не трогаем.
+func SaveStateHostsMode(dataDir string) error {
+	return SaveToFile(dataDir, &State{Mode: ModeHosts, Platform: runtime.GOOS})
 }
 
 // prepareForEnable вызывается перед установкой 127.0.0.1 (на Linux — бэкап resolv.conf).
@@ -20,12 +28,13 @@ func SetSystemDNS(adapter string, useDHCP bool, servers []string, dataDir string
 }
 
 // Enable сохраняет текущее DNS в dataDir и переключает систему на 127.0.0.1 (Gate).
-// Требуются права администратора.
+// Требуются права администратора. Перед сохранением выставляется Mode=ModeDNS.
 func Enable(dataDir string) error {
 	state, err := getCurrent()
 	if err != nil {
 		return err
 	}
+	state.Mode = ModeDNS
 	if err := SaveToFile(dataDir, state); err != nil {
 		return err
 	}
@@ -35,8 +44,8 @@ func Enable(dataDir string) error {
 	return setSystemDNS(state.Adapter, false, []string{"127.0.0.1"}, dataDir)
 }
 
-// Disable восстанавливает DNS из сохранённого в dataDir состояния и удаляет бэкап.
-// Требуются права администратора.
+// Disable восстанавливает настройки из сохранённого состояния: DNS (mode=dns) или только hosts (mode=hosts).
+// Для mode=hosts вызывающий должен вызвать hostsfilter.Disable(dataDir) отдельно; здесь только RemoveBackup для JSON.
 func Disable(dataDir string) error {
 	state, err := LoadFromFile(dataDir)
 	if err != nil {
@@ -45,7 +54,11 @@ func Disable(dataDir string) error {
 	if state == nil {
 		return nil // не было включено — нечего восстанавливать
 	}
-	// На Linux всегда восстанавливаем из бэкапа resolv.conf (полное содержимое).
+	if state.Mode == ModeHosts {
+		// Восстановление hosts делается в API (hostsfilter.Disable). Здесь только удаляем наш state-файл.
+		return RemoveBackup(dataDir)
+	}
+	// mode=dns (или пустой для совместимости)
 	if state.Platform == "linux" {
 		err = setSystemDNS(state.Adapter, true, nil, dataDir)
 	} else if state.WasDHCP {

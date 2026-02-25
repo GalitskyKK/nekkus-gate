@@ -6,13 +6,21 @@ import (
 	"path/filepath"
 )
 
-// State — сохранённое состояние DNS перед переключением на Gate (для восстановления).
+// FilterMode — способ работы фильтра: через системный DNS (порт 53) или через файл hosts.
+const (
+	ModeDNS   = "dns"
+	ModeHosts = "hosts"
+)
+
+// State — сохранённое состояние перед включением фильтра (для восстановления при Выключить).
 type State struct {
-	// WasDHCP — true если DNS получался по DHCP (восстанавливаем автоматически).
+	// Mode — "dns" (переключили системный DNS на 127.0.0.1) или "hosts" (добавили блок-лист в hosts).
+	Mode string `json:"mode,omitempty"`
+	// WasDHCP — true если DNS получался по DHCP (восстанавливаем автоматически). Только для mode=dns.
 	WasDHCP bool `json:"was_dhcp"`
-	// Servers — сохранённые адреса DNS (если не DHCP). Восстанавливаем как статический список.
+	// Servers — сохранённые адреса DNS (если не DHCP). Только для mode=dns.
 	Servers []string `json:"servers,omitempty"`
-	// Adapter — идентификатор адаптера/интерфейса (платформо-специфичный).
+	// Adapter — идентификатор адаптера/интерфейса (платформо-специфичный). Только для mode=dns.
 	Adapter string `json:"adapter,omitempty"`
 	// Platform — windows, darwin, linux (для отладки).
 	Platform string `json:"platform,omitempty"`

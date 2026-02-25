@@ -1,104 +1,89 @@
 package dns
 
 import (
-	"context"
 	"fmt"
 	"log"
 	"net"
 	"sync"
-	"time"
 
-	"github.com/GalitskyKK/nekkus-gate/internal/blocklist"
+	"github.com/GalitskyKK/nekkus-gate/internal/filter"
+	"github.com/GalitskyKK/nekkus-gate/internal/querylog"
 	"github.com/GalitskyKK/nekkus-gate/internal/stats"
 	"github.com/miekg/dns"
 )
 
-// Server — локальный DNS-сервер: блокирует домены из blocklist, остальное форвардит на upstream.
+// Server — локальный DNS-сервер (UDP + TCP): фильтр, кэш, upstream, лог.
 type Server struct {
 	addr      string
-	upstream  string
-	blocklist *blocklist.Blocklist
-	stats     *stats.Stats
-	pc        *dns.Server
+	handler   *Handler
+	udpServer *dns.Server
+	tcpServer *dns.Server
 	mu        sync.Mutex
 }
 
-// NewServer создаёт DNS-сервер. addr — listen (например "127.0.0.1:5353"), upstream — например "8.8.8.8:53".
-func NewServer(addr, upstream string, bl *blocklist.Blocklist, st *stats.Stats) *Server {
-	if upstream == "" {
-		upstream = "8.8.8.8:53"
-	}
+// NewServer создаёт DNS-сервер. addr — listen (например "127.0.0.1:53").
+// cache, upstream, engine, qlog, st — общие компоненты.
+func NewServer(addr string, cache *Cache, upstream *UpstreamResolver, engine *filter.Engine, qlog *querylog.Log, st *stats.Stats) *Server {
+	handler := NewHandler(cache, upstream, engine, qlog, st)
 	return &Server{
-		addr:      addr,
-		upstream:  upstream,
-		blocklist: bl,
-		stats:     st,
+		addr:    addr,
+		handler: handler,
 	}
 }
 
-// Start запускает UDP-сервер. Блокирует до ctx.Done() или ошибки.
-func (s *Server) Start(ctx context.Context) error {
+// Start запускает UDP и TCP серверы в фоне и возвращается.
+func (s *Server) Start() error {
 	s.mu.Lock()
-	s.pc = &dns.Server{
+	s.udpServer = &dns.Server{
 		Addr:    s.addr,
 		Net:     "udp",
-		Handler: dns.HandlerFunc(s.serve),
+		Handler: s.handler,
+	}
+	s.tcpServer = &dns.Server{
+		Addr:    s.addr,
+		Net:     "tcp",
+		Handler: s.handler,
 	}
 	s.mu.Unlock()
-	log.Printf("Gate DNS → udp://%s (upstream %s)", s.addr, s.upstream)
-	return s.pc.ListenAndServe()
+
+	log.Printf("Gate DNS → udp+tcp://%s", s.addr)
+
+	go func() {
+		if err := s.udpServer.ListenAndServe(); err != nil {
+			log.Printf("Gate DNS UDP: %v", err)
+		}
+	}()
+	go func() {
+		if err := s.tcpServer.ListenAndServe(); err != nil {
+			log.Printf("Gate DNS TCP: %v", err)
+		}
+	}()
+	return nil
 }
 
-func (s *Server) serve(w dns.ResponseWriter, req *dns.Msg) {
-	if len(req.Question) == 0 {
-		dns.HandleFailed(w, req)
-		return
-	}
-	q := req.Question[0]
-	qname := q.Name
-	s.stats.IncTotal()
-	if s.blocklist.Blocked(qname) {
-		s.stats.IncBlocked()
-		m := new(dns.Msg)
-		m.SetRcode(req, dns.RcodeNameError)
-		m.RecursionAvailable = true
-		_ = w.WriteMsg(m)
-		return
-	}
-	// Форвард к upstream
-	client := &dns.Client{Net: "udp", Timeout: 3 * time.Second}
-	resp, _, err := client.Exchange(req, s.upstream)
-	if err != nil {
-		m := new(dns.Msg)
-		m.SetRcode(req, dns.RcodeServerFailure)
-		_ = w.WriteMsg(m)
-		return
-	}
-	_ = w.WriteMsg(resp)
-}
-
-// Addr возвращает адрес сервера (host:port).
-func (s *Server) Addr() string { return s.addr }
-
-// Shutdown останавливает сервер (для перезапуска на другом порту или при выходе).
+// Shutdown останавливает UDP и TCP серверы.
 func (s *Server) Shutdown() error {
 	s.mu.Lock()
-	pc := s.pc
+	udp, tcp := s.udpServer, s.tcpServer
+	s.udpServer, s.tcpServer = nil, nil
 	s.mu.Unlock()
-	if pc == nil {
-		return nil
+
+	var err error
+	if udp != nil {
+		err = udp.Shutdown()
 	}
-	return pc.Shutdown()
+	if tcp != nil {
+		if e := tcp.Shutdown(); e != nil {
+			err = e
+		}
+	}
+	return err
 }
 
-// SetUpstream меняет upstream (например "1.1.1.1:53").
-func (s *Server) SetUpstream(upstream string) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.upstream = upstream
-}
+// Addr возвращает адрес сервера.
+func (s *Server) Addr() string { return s.addr }
 
-// ResolveAddr возвращает host:port для указанного хоста. Для "127.0.0.1" или "" возвращает s.addr.
+// ResolveAddr возвращает "host:port" для указанного хоста и порта.
 func ResolveAddr(host string, port int) (string, error) {
 	if host == "" || host == "127.0.0.1" || host == "localhost" {
 		return fmt.Sprintf("127.0.0.1:%d", port), nil

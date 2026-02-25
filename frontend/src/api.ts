@@ -27,9 +27,13 @@ export async function fetchTopBlocked(limit?: number): Promise<TopBlockedEntry[]
   return res.json()
 }
 
+export type FilterMode = 'dns' | 'hosts'
+
 export interface FilterStatus {
   active: boolean
+  mode: FilterMode
   port: number
+  blocklist_count?: number
 }
 
 export async function fetchFilterStatus(): Promise<FilterStatus> {
@@ -38,7 +42,7 @@ export async function fetchFilterStatus(): Promise<FilterStatus> {
   return res.json()
 }
 
-export async function enableFilter(): Promise<{ ok: boolean; active: boolean }> {
+export async function enableFilter(): Promise<{ ok: boolean; active: boolean; mode?: FilterMode }> {
   const res = await fetch(`${BASE}/api/filter/enable`, { method: 'POST' })
   const data = await res.json()
   if (!res.ok) throw new Error((data as { error?: string }).error || res.statusText)
@@ -50,4 +54,17 @@ export async function disableFilter(): Promise<{ ok: boolean; active: boolean }>
   const data = await res.json()
   if (!res.ok) throw new Error((data as { error?: string }).error || res.statusText)
   return data
+}
+
+export interface PortCheck {
+  available: boolean
+  blocked_by?: string
+  blocker_pid?: number
+  suggestion?: string
+}
+
+export async function fetchPortCheck(): Promise<PortCheck> {
+  const res = await fetch(`${BASE}/api/dns/port-check`)
+  if (!res.ok) throw new Error(res.statusText)
+  return res.json()
 }

@@ -12,10 +12,12 @@ import {
   fetchStats,
   fetchFilterStatus,
   fetchTopBlocked,
+  fetchPortCheck,
   enableFilter,
   disableFilter,
   type GateStats,
   type TopBlockedEntry,
+  type PortCheck,
 } from './api'
 
 const REFRESH_MS = 3000
@@ -30,21 +32,28 @@ export default function App() {
   const [stats, setStats] = useState<GateStats | null>(null)
   const [topBlocked, setTopBlocked] = useState<TopBlockedEntry[]>([])
   const [filterActive, setFilterActive] = useState<boolean | null>(null)
+  const [filterActiveMode, setFilterActiveMode] = useState<'dns' | 'hosts'>('dns')
+  const [filterBlocklistCount, setFilterBlocklistCount] = useState(0)
   const [filterBusy, setFilterBusy] = useState(false)
   const [filterError, setFilterError] = useState<string | null>(null)
+  const [portCheck, setPortCheck] = useState<PortCheck | null>(null)
   const [error, setError] = useState<string | null>(null)
 
   const load = useCallback(async () => {
     try {
       setError(null)
-      const [s, t, f] = await Promise.all([
+      const [s, t, f, pc] = await Promise.all([
         fetchStats(),
         fetchTopBlocked(10).catch(() => []),
-        fetchFilterStatus().catch(() => ({ active: false, port: 5354 })),
+        fetchFilterStatus().catch(() => ({ active: false, mode: 'dns' as const, port: 5354, blocklist_count: 0 })),
+        fetchPortCheck().catch(() => ({ available: true })),
       ])
       setStats(s)
       setTopBlocked(t)
       setFilterActive(f.active)
+      setFilterActiveMode((f.mode === 'hosts' ? 'hosts' : 'dns'))
+      setFilterBlocklistCount(f.blocklist_count ?? 0)
+      setPortCheck(pc)
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Ошибка загрузки')
     }
@@ -59,8 +68,9 @@ export default function App() {
         await disableFilter()
         setFilterActive(false)
       } else {
-        await enableFilter()
+        const res = await enableFilter()
         setFilterActive(true)
+        setFilterActiveMode(res.mode === 'hosts' ? 'hosts' : 'dns')
       }
     } catch (e) {
       setFilterError(e instanceof Error ? e.message : 'Ошибка переключения фильтра')
@@ -107,7 +117,13 @@ export default function App() {
               <div className="gate-filter-row">
                 <StatusDot
                   status={filterActive ? 'online' : 'offline'}
-                  label={filterActive ? 'Фильтр включён — система использует 127.0.0.1' : 'Фильтр выключен — DNS из настроек системы'}
+                  label={
+                    filterActive
+                      ? filterActiveMode === 'hosts'
+                        ? 'Фильтр включён (через файл hosts)'
+                        : 'Фильтр включён (DNS 127.0.0.1)'
+                      : 'Фильтр выключен'
+                  }
                   pulse={!!filterActive}
                 />
                 <Button
@@ -120,8 +136,23 @@ export default function App() {
                 </Button>
               </div>
               <p className="gate-filter-hint">
-                Запуск от администратора → один клик «Включить», DNS везде идёт через Gate. «Выключить» — настройки системы восстанавливаются.
+                Запуск от администратора → «Включить» и всё работает (если порт 53 занят, блокировка пойдёт через файл hosts). «Выключить» — всё восстанавливается.
               </p>
+              {portCheck && !portCheck.available && !filterActive && (
+                <p className="gate-filter-hint gate-filter-port-hint" role="status">
+                  {portCheck.suggestion ?? 'Порт 53 занят. При нажатии «Включить» будет использован режим через файл hosts.'}
+                </p>
+              )}
+              {filterActive && filterActiveMode === 'hosts' && (
+                <p className="gate-filter-hint gate-filter-hosts-note">
+                  В файл hosts записано {filterBlocklistCount} доменов из блок-листа (плюс www-варианты). Если сайты не блокируются: в cmd выполните <code>ipconfig /flushdns</code>, затем перезапустите браузер.
+                </p>
+              )}
+              {filterBlocklistCount === 0 && (
+                <p className="gate-filter-warning" role="status">
+                  В блок-листе 0 доменов — блокировать нечего. Добавьте домены в <code>blocklist.txt</code> (один на строку) в папке данных Gate (Windows: <code>%APPDATA%\nekkus\gate</code>), перезапустите Gate и снова нажмите «Включить».
+                </p>
+              )}
               {filterError && (
                 <p className="gate-filter-error" role="alert">
                   {filterError}
@@ -171,7 +202,7 @@ export default function App() {
           )}
 
           <p className="gate-hint">
-            Блок-лист: <code>blocklist.txt</code> в папке данных Gate.
+            Блок-лист: файл <code>blocklist.txt</code> в папке данных (один домен на строку). Windows: <code>%APPDATA%\nekkus\gate</code>, Linux: <code>~/.config/nekkus/gate</code>. После изменения перезапустите Gate.
           </p>
         </AppShell>
       </PageLayout>

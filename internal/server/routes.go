@@ -4,11 +4,15 @@ import (
 	"encoding/json"
 	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
 	coreserver "github.com/GalitskyKK/nekkus-core/pkg/server"
 	"github.com/GalitskyKK/nekkus-gate/internal/blocklist"
+	"github.com/GalitskyKK/nekkus-gate/internal/hostsfilter"
+	"github.com/GalitskyKK/nekkus-gate/internal/platform"
+	"github.com/GalitskyKK/nekkus-gate/internal/recovery"
 	"github.com/GalitskyKK/nekkus-gate/internal/stats"
 	"github.com/GalitskyKK/nekkus-gate/internal/sysdns"
 )
@@ -64,58 +68,108 @@ func RegisterRoutes(srv *coreserver.Server, st *stats.Stats, bl *blocklist.Block
 		_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 	})
 
-	srv.Mux.HandleFunc("GET /api/top_blocked", func(w http.ResponseWriter, _ *http.Request) {
+	srv.Mux.HandleFunc("GET /api/top_blocked", func(w http.ResponseWriter, r *http.Request) {
 		setCORS(w)
 		w.Header().Set("Content-Type", "application/json")
-		type entry struct{ Domain string `json:"domain"`; Count int `json:"count"` }
-		_ = json.NewEncoder(w).Encode([]entry{})
+		limit := 10
+		if s := r.URL.Query().Get("limit"); s != "" {
+			if n, err := strconv.Atoi(s); err == nil && n > 0 && n <= 100 {
+				limit = n
+			}
+		}
+		entries := runner.GetTopBlocked(limit)
+		if entries == nil {
+			entries = []TopBlockedEntry{}
+		}
+		_ = json.NewEncoder(w).Encode(entries)
 	})
 
-	// Состояние DNS-фильтра: включён ли (системный DNS = 127.0.0.1, сервер на 53).
+	srv.Mux.HandleFunc("GET /api/dns/port-check", func(w http.ResponseWriter, _ *http.Request) {
+		setCORS(w)
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(platform.CheckPort53())
+	})
+
+	// Состояние фильтра: active, mode (dns | hosts), port.
 	srv.Mux.HandleFunc("GET /api/filter/status", func(w http.ResponseWriter, _ *http.Request) {
 		setCORS(w)
 		active := sysdns.HasBackup(dataDir)
+		mode := ""
+		if state, _ := sysdns.LoadFromFile(dataDir); state != nil {
+			mode = state.Mode
+			if mode == "" {
+				mode = sysdns.ModeDNS
+			}
+		}
 		port := defaultDNSPort
 		if runner != nil {
 			port = runner.Port()
 		}
 		writeJSON(w, map[string]interface{}{
-			"active": active,
-			"port":   port,
+			"active":          active,
+			"mode":            mode,
+			"port":            port,
+			"blocklist_count": bl.Count(),
 		}, http.StatusOK)
 	})
 
 	srv.Mux.HandleFunc("POST /api/filter/enable", func(w http.ResponseWriter, _ *http.Request) {
 		setCORS(w)
-		// Сначала проверяем, что порт 53 свободен. Иначе не трогаем системный DNS — пользователь не останется без интернета.
-		if err := tryListenUDP53(); err != nil {
-			msg := "Порт 53 занят другим приложением (например, служба «Кэширование DNS»). Остановите его в «Службы» или диспетчере задач, затем нажмите «Включить» снова."
-			writeJSON(w, map[string]string{"error": msg}, http.StatusInternalServerError)
+		// Пробуем порт 53. Если свободен — режим DNS (системный DNS → 127.0.0.1, Gate на 53).
+		// Если занят — режим hosts: дописываем блок-лист в hosts, ничего не останавливаем.
+		if err := tryListenUDP53(); err == nil {
+			if err := sysdns.Enable(dataDir); err != nil {
+				msg := err.Error()
+				if strings.Contains(strings.ToLower(msg), "access is denied") ||
+					strings.Contains(strings.ToLower(msg), "отказано в доступе") ||
+					strings.Contains(strings.ToLower(msg), "denied") {
+					msg = "Запустите Gate от имени администратора: ПКМ по программе → «Запуск от имени администратора», затем снова нажмите «Включить»."
+				}
+				writeJSON(w, map[string]string{"error": msg}, http.StatusInternalServerError)
+				return
+			}
+			if runner != nil {
+				runner.Restart(53)
+			}
+			_ = recovery.Lock(dataDir)
+			writeJSON(w, map[string]interface{}{"ok": true, "active": true, "mode": sysdns.ModeDNS}, http.StatusOK)
 			return
 		}
-		if err := sysdns.Enable(dataDir); err != nil {
+		// Порт 53 занят — включаем через файл hosts (без переключения DNS, ничего не останавливаем).
+		domains := bl.All()
+		if err := hostsfilter.Enable(dataDir, domains); err != nil {
 			msg := err.Error()
 			if strings.Contains(strings.ToLower(msg), "access is denied") ||
-				strings.Contains(strings.ToLower(msg), "отказано в доступе") ||
-				strings.Contains(strings.ToLower(msg), "denied") {
-				msg = "Запустите Gate от имени администратора: ПКМ по программе → «Запуск от имени администратора», затем снова нажмите «Включить»."
+				strings.Contains(strings.ToLower(msg), "отказано") ||
+				strings.Contains(strings.ToLower(msg), "denied") ||
+				strings.Contains(strings.ToLower(msg), "permission") {
+				msg = "Запустите Gate от имени администратора, затем снова нажмите «Включить»."
 			}
 			writeJSON(w, map[string]string{"error": msg}, http.StatusInternalServerError)
 			return
 		}
-		if runner != nil {
-			runner.Restart(53)
+		if err := sysdns.SaveStateHostsMode(dataDir); err != nil {
+			writeJSON(w, map[string]string{"error": err.Error()}, http.StatusInternalServerError)
+			return
 		}
-		writeJSON(w, map[string]interface{}{"ok": true, "active": true}, http.StatusOK)
+		writeJSON(w, map[string]interface{}{"ok": true, "active": true, "mode": sysdns.ModeHosts}, http.StatusOK)
 	})
 
 	srv.Mux.HandleFunc("POST /api/filter/disable", func(w http.ResponseWriter, _ *http.Request) {
 		setCORS(w)
+		state, _ := sysdns.LoadFromFile(dataDir)
+		if state != nil && state.Mode == sysdns.ModeHosts {
+			if err := hostsfilter.Disable(dataDir); err != nil {
+				writeJSON(w, map[string]string{"error": err.Error()}, http.StatusInternalServerError)
+				return
+			}
+		}
 		if err := sysdns.Disable(dataDir); err != nil {
 			writeJSON(w, map[string]string{"error": err.Error()}, http.StatusInternalServerError)
 			return
 		}
-		if runner != nil {
+		recovery.Unlock(dataDir)
+		if runner != nil && (state == nil || state.Mode != sysdns.ModeHosts) {
 			runner.Restart(defaultDNSPort)
 		}
 		writeJSON(w, map[string]interface{}{"ok": true, "active": false}, http.StatusOK)

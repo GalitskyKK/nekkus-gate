@@ -20,9 +20,14 @@ import (
 	pb "github.com/GalitskyKK/nekkus-core/pkg/protocol"
 
 	"github.com/GalitskyKK/nekkus-gate/internal/blocklist"
+	"github.com/GalitskyKK/nekkus-gate/internal/filter"
+	"github.com/GalitskyKK/nekkus-gate/internal/hostsfilter"
 	"github.com/GalitskyKK/nekkus-gate/internal/module"
+	"github.com/GalitskyKK/nekkus-gate/internal/querylog"
+	"github.com/GalitskyKK/nekkus-gate/internal/recovery"
 	"github.com/GalitskyKK/nekkus-gate/internal/server"
 	"github.com/GalitskyKK/nekkus-gate/internal/stats"
+	"github.com/GalitskyKK/nekkus-gate/internal/store"
 	"github.com/GalitskyKK/nekkus-gate/internal/sysdns"
 	"github.com/GalitskyKK/nekkus-gate/ui"
 
@@ -85,14 +90,39 @@ func main() {
 		log.Printf("blocklist loaded: %d domains from %s", bl.Count(), blocklistPath)
 	}
 
-	// При старте восстанавливаем системный DNS, если остался бэкап (например, после сбоя).
-	if sysdns.HasBackup(dataDir) {
+	cfg, err := store.LoadConfig(dataDir)
+	if err != nil {
+		log.Printf("config load: %v", err)
+		cfg, _ = store.LoadConfig("") // fallback to default
+	}
+	if cfg == nil {
+		cfg, _ = store.LoadConfig("")
+	}
+	if cfg == nil {
+		cfg = store.DefaultConfig(dataDir)
+	}
+	engine := filter.New(bl, cfg)
+	qlog := querylog.New(500)
+
+	// Восстановление после краша: если остался lock — прошлый запуск не завершился, восстанавливаем DNS.
+	if hadLock, _ := recovery.CheckAndRecover(dataDir); hadLock {
+		log.Print("Gate: previous run did not exit cleanly, restoring system DNS")
 		if err := sysdns.Disable(dataDir); err != nil {
-			log.Printf("restore DNS on startup: %v", err)
+			log.Printf("Gate: restore DNS after crash: %v", err)
+		}
+	}
+	// При старте восстанавливаем настройки, если фильтр был включён и приложение перезапустили (или упало).
+	if sysdns.HasBackup(dataDir) {
+		state, _ := sysdns.LoadFromFile(dataDir)
+		if state != nil && state.Mode == sysdns.ModeHosts {
+			_ = hostsfilter.Disable(dataDir)
+		}
+		if err := sysdns.Disable(dataDir); err != nil {
+			log.Printf("restore filter state on startup: %v", err)
 		}
 	}
 
-	dnsRunner := server.NewDNSRunner(bl, st, "8.8.8.8:53")
+	dnsRunner := server.NewDNSRunner(engine, st, cfg, qlog)
 	dnsRunner.Start(*dnsPort)
 	defer dnsRunner.Shutdown()
 
