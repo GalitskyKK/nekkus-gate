@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -36,7 +37,9 @@ func (w *WindowsResolver) Lookup(clientAddr string) string {
 
 // findUDPClientPID ищет в netstat -ano -p UDP строку с локальным портом port (клиент, обращающийся к DNS).
 func findUDPClientPID(port int) int {
-	out, err := exec.Command("netstat", "-ano", "-p", "UDP").Output()
+	cmd := exec.Command("netstat", "-ano", "-p", "UDP")
+	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+	out, err := cmd.Output()
 	if err != nil {
 		return 0
 	}
@@ -71,7 +74,9 @@ func NewResolver() Resolver {
 }
 
 func getProcessNameWindows(pid int) string {
-	out, err := exec.Command("tasklist", "/FI", fmt.Sprintf("PID eq %d", pid), "/FO", "CSV", "/NH").Output()
+	cmd := exec.Command("tasklist", "/FI", fmt.Sprintf("PID eq %d", pid), "/FO", "CSV", "/NH")
+	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+	out, err := cmd.Output()
 	if err != nil {
 		return ""
 	}

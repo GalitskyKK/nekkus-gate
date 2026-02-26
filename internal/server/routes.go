@@ -53,14 +53,22 @@ func RegisterRoutes(srv *coreserver.Server, st *stats.Stats, bl *blocklist.Block
 		if total > 0 {
 			pct = float64(blockedToday) / float64(total) * 100
 		}
-		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		payload := map[string]interface{}{
 			"total_queries":    total,
 			"blocked_today":   blockedToday,
 			"blocked_total":   blockedTotal,
 			"blocked_percent": pct,
 			"blocklist_count": bl.Count(),
 			"timestamp":       time.Now().Unix(),
-		})
+		}
+		// Данные для виджета Hub: Privacy Score по трекерам
+		if runner != nil {
+			global, _ := runner.GetPrivacyStats()
+			payload["score"] = global.Score
+			payload["tracker_queries"] = global.TrackerQueries
+			payload["tracker_blocked"] = global.TrackerBlocked
+		}
+		_ = json.NewEncoder(w).Encode(payload)
 	})
 
 	srv.Mux.HandleFunc("GET /api/health", func(w http.ResponseWriter, _ *http.Request) {

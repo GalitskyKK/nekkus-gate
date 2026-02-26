@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+	"syscall"
 )
 
 func whoBlocks53() PortStatus {
@@ -14,7 +15,9 @@ func whoBlocks53() PortStatus {
 }
 
 func whoBlocks53Windows() PortStatus {
-	out, err := exec.Command("netstat", "-ano", "-p", "UDP").Output()
+	cmd := exec.Command("netstat", "-ano", "-p", "UDP")
+	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+	out, err := cmd.Output()
 	if err != nil {
 		return PortStatus{Available: false, Suggestion: "Port 53 in use. Run as admin or use hosts mode."}
 	}
@@ -43,7 +46,9 @@ func whoBlocks53Windows() PortStatus {
 }
 
 func getProcessNameWindows(pid int) string {
-	out, err := exec.Command("tasklist", "/FI", fmt.Sprintf("PID eq %d", pid), "/FO", "CSV", "/NH").Output()
+	cmd := exec.Command("tasklist", "/FI", fmt.Sprintf("PID eq %d", pid), "/FO", "CSV", "/NH")
+	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+	out, err := cmd.Output()
 	if err != nil {
 		return "unknown"
 	}
