@@ -136,7 +136,7 @@ export default function App() {
                 </Button>
               </div>
               <p className="gate-filter-hint">
-                Запуск от администратора → «Включить» и всё работает (если порт 53 занят, блокировка пойдёт через файл hosts). «Выключить» — всё восстанавливается.
+                Запуск от администратора → «Включить» и всё работает (если порт 53 занят, блокировка пойдёт через файл hosts). «Выключить» — всё восстанавливается. При запуске через Hub запустите Hub от администратора, иначе смена DNS не сработает.
               </p>
               {portCheck && !portCheck.available && !filterActive && (
                 <p className="gate-filter-hint gate-filter-port-hint" role="status">

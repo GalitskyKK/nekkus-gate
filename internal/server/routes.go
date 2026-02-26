@@ -115,6 +115,16 @@ func RegisterRoutes(srv *coreserver.Server, st *stats.Stats, bl *blocklist.Block
 
 	srv.Mux.HandleFunc("POST /api/filter/enable", func(w http.ResponseWriter, _ *http.Request) {
 		setCORS(w)
+		// Уже включено — не запускать netsh/PowerShell повторно (нет моргания окон).
+		if sysdns.HasBackup(dataDir) {
+			state, _ := sysdns.LoadFromFile(dataDir)
+			mode := sysdns.ModeDNS
+			if state != nil && state.Mode != "" {
+				mode = state.Mode
+			}
+			writeJSON(w, map[string]interface{}{"ok": true, "active": true, "mode": mode}, http.StatusOK)
+			return
+		}
 		// Пробуем порт 53. Если свободен — режим DNS (системный DNS → 127.0.0.1, Gate на 53).
 		// Если занят — режим hosts: дописываем блок-лист в hosts, ничего не останавливаем.
 		if err := tryListenUDP53(); err == nil {

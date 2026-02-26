@@ -9,11 +9,13 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"syscall"
 )
 
 func getCurrent() (*State, error) {
 	cmd := exec.Command("netsh", "interface", "ipv4", "show", "config")
 	cmd.Stderr = nil
+	hideWindow(cmd)
 	out, err := cmd.Output()
 	if err != nil {
 		return nil, fmt.Errorf("netsh show config: %w", err)
@@ -63,6 +65,7 @@ func parseNetshConfigAllAdapters(out []byte) []string {
 func getConnectedInterfaceNames() []string {
 	cmd := exec.Command("netsh", "interface", "show", "interface")
 	cmd.Stderr = nil
+	hideWindow(cmd)
 	out, err := cmd.Output()
 	if err != nil {
 		return nil
@@ -230,6 +233,20 @@ func parseNetshDNS(block []byte) (wasDHCP bool, servers []string) {
 func prepareForEnableImpl(dataDir string) error { return nil }
 func cleanupAfterDisableImpl(dataDir string)    {}
 
+func flushDNSCacheImpl() {
+	cmd := exec.Command("ipconfig", "/flushdns")
+	hideWindow(cmd)
+	_ = cmd.Run()
+}
+
+// hideWindow скрывает консольное окно дочернего процесса (PowerShell/CMD не моргают).
+func hideWindow(cmd *exec.Cmd) {
+	if cmd.SysProcAttr == nil {
+		cmd.SysProcAttr = &syscall.SysProcAttr{}
+	}
+	cmd.SysProcAttr.HideWindow = true
+}
+
 func setSystemDNS(adapter string, useDHCP bool, servers []string, dataDir string) error {
 	if adapter == "" {
 		return fmt.Errorf("adapter name is required")
@@ -239,9 +256,6 @@ func setSystemDNS(adapter string, useDHCP bool, servers []string, dataDir string
 	errP := setSystemDNSPowerShell(adapter, useDHCP, servers)
 	if errN != nil && errP != nil {
 		return fmt.Errorf("netsh: %w; PowerShell: %v", errN, errP)
-	}
-	if !useDHCP {
-		_ = exec.Command("ipconfig", "/flushdns").Run()
 	}
 	return nil
 }
@@ -257,12 +271,14 @@ func setSystemDNSNetsh(adapter string, useDHCP bool, servers []string) error {
 		}
 		cmd = exec.Command("netsh", "interface", "ipv4", "set", "dns", "name="+adapterQuoted, "static", servers[0])
 	}
+	hideWindow(cmd)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("%w (%s)", err, bytes.TrimSpace(out))
 	}
 	for i := 1; i < len(servers); i++ {
 		cmd = exec.Command("netsh", "interface", "ipv4", "add", "dns", "name="+adapterQuoted, servers[i], strconv.Itoa(i+1))
+		hideWindow(cmd)
 		if out2, err := cmd.CombinedOutput(); err != nil {
 			return fmt.Errorf("netsh add dns: %w (%s)", err, bytes.TrimSpace(out2))
 		}
@@ -272,9 +288,9 @@ func setSystemDNSNetsh(adapter string, useDHCP bool, servers []string) error {
 
 func setSystemDNSPowerShell(adapter string, useDHCP bool, servers []string) error {
 	if useDHCP {
-		// Reset to DHCP
 		script := fmt.Sprintf(`Set-DnsClientServerAddress -InterfaceAlias %q -ResetServerAddresses`, adapter)
-		cmd := exec.Command("powershell", "-NoProfile", "-NonInteractive", "-Command", script)
+		cmd := exec.Command("powershell", "-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-Command", script)
+		hideWindow(cmd)
 		out, err := cmd.CombinedOutput()
 		if err != nil {
 			return fmt.Errorf("%w (%s)", err, bytes.TrimSpace(out))
@@ -290,7 +306,8 @@ func setSystemDNSPowerShell(adapter string, useDHCP bool, servers []string) erro
 	}
 	addrList := strings.Join(quoted, ",")
 	script := fmt.Sprintf(`Set-DnsClientServerAddress -InterfaceAlias %q -ServerAddresses @(%s)`, adapter, addrList)
-	cmd := exec.Command("powershell", "-NoProfile", "-NonInteractive", "-Command", script)
+	cmd := exec.Command("powershell", "-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-Command", script)
+	hideWindow(cmd)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("%w (%s)", err, bytes.TrimSpace(out))

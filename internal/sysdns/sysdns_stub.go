@@ -12,6 +12,7 @@ func getCurrent() (*State, error) {
 
 func prepareForEnableImpl(dataDir string) error { return errUnsupported }
 func cleanupAfterDisableImpl(dataDir string)   {}
+func flushDNSCacheImpl()                      {}
 
 func setSystemDNS(adapter string, useDHCP bool, servers []string, dataDir string) error {
 	return errUnsupported

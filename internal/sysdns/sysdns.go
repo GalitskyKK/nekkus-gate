@@ -27,15 +27,11 @@ func SetSystemDNS(adapter string, useDHCP bool, servers []string, dataDir string
 	return setSystemDNS(adapter, useDHCP, servers, dataDir)
 }
 
-// Enable сохраняет текущее DNS в dataDir и переключает систему на 127.0.0.1 (Gate).
-// Требуются права администратора. На Windows ставит 127.0.0.1 на все подключённые интерфейсы.
+// Enable переключает систему на 127.0.0.1 (Gate). Состояние сохраняется только после успешной смены DNS.
+// Требуются права администратора. Если запущен через Hub без админа — смена DNS не пройдёт, бэкап не создаётся.
 func Enable(dataDir string) error {
 	state, err := getCurrent()
 	if err != nil {
-		return err
-	}
-	state.Mode = ModeDNS
-	if err := SaveToFile(dataDir, state); err != nil {
 		return err
 	}
 	if err := prepareForEnable(dataDir); err != nil {
@@ -50,8 +46,16 @@ func Enable(dataDir string) error {
 			return err
 		}
 	}
+	state.Mode = ModeDNS
+	if err := SaveToFile(dataDir, state); err != nil {
+		return err
+	}
+	flushDNSCache()
 	return nil
 }
+
+// flushDNSCache вызывается после смены DNS (на Windows — ipconfig /flushdns).
+func flushDNSCache() { flushDNSCacheImpl() }
 
 // Disable восстанавливает настройки из сохранённого состояния: DNS (mode=dns) или только hosts (mode=hosts).
 // Для mode=hosts вызывающий должен вызвать hostsfilter.Disable(dataDir) отдельно; здесь только RemoveBackup для JSON.
@@ -67,7 +71,7 @@ func Disable(dataDir string) error {
 		// Восстановление hosts делается в API (hostsfilter.Disable). Здесь только удаляем наш state-файл.
 		return RemoveBackup(dataDir)
 	}
-	// mode=dns (или пустой для совместимости) — восстанавливаем все адаптеры, на которых меняли DNS.
+	// mode=dns — восстанавливаем DNS на всех адаптерах. При ошибке (нет прав, элемент не найден) всё равно снимаем бэкап.
 	adapters := state.Adapters
 	if len(adapters) == 0 {
 		adapters = []string{state.Adapter}
@@ -80,9 +84,8 @@ func Disable(dataDir string) error {
 		} else {
 			err = setSystemDNS(adapter, false, state.Servers, dataDir)
 		}
-		if err != nil {
-			return err
-		}
+		// Игнорируем ошибку (нет прав при запуске через Hub, «Элемент не найден» и т.п.) — снимаем бэкап в любом случае.
+		_ = err
 	}
 	cleanupAfterDisable(dataDir)
 	return RemoveBackup(dataDir)

@@ -72,6 +72,7 @@ func getDNSServers(service string) ([]string, error) {
 
 func prepareForEnableImpl(dataDir string) error { return nil }
 func cleanupAfterDisableImpl(dataDir string)    {}
+func flushDNSCacheImpl()                        {}
 
 func setSystemDNS(adapter string, useDHCP bool, servers []string, dataDir string) error {
 	if adapter == "" {

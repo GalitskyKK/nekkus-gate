@@ -25,6 +25,7 @@ func prepareForEnableImpl(dataDir string) error {
 func cleanupAfterDisableImpl(dataDir string) {
 	_ = os.Remove(filepath.Join(dataDir, resolvBackupName))
 }
+func flushDNSCacheImpl() {}
 
 func getCurrent() (*State, error) {
 	// Сохраняем путь к resolv.conf (часто симлинк на /run/systemd/resolve/stub-resolv.conf).
