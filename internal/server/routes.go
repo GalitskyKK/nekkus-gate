@@ -12,6 +12,7 @@ import (
 	"github.com/GalitskyKK/nekkus-gate/internal/blocklist"
 	"github.com/GalitskyKK/nekkus-gate/internal/hostsfilter"
 	"github.com/GalitskyKK/nekkus-gate/internal/platform"
+	"github.com/GalitskyKK/nekkus-gate/internal/querylog"
 	"github.com/GalitskyKK/nekkus-gate/internal/recovery"
 	"github.com/GalitskyKK/nekkus-gate/internal/stats"
 	"github.com/GalitskyKK/nekkus-gate/internal/sysdns"
@@ -88,6 +89,44 @@ func RegisterRoutes(srv *coreserver.Server, st *stats.Stats, bl *blocklist.Block
 		setCORS(w)
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(platform.CheckPort53())
+	})
+
+	srv.Mux.HandleFunc("GET /api/queries", func(w http.ResponseWriter, r *http.Request) {
+		setCORS(w)
+		w.Header().Set("Content-Type", "application/json")
+		limit := 100
+		if s := r.URL.Query().Get("limit"); s != "" {
+			if n, err := strconv.Atoi(s); err == nil && n > 0 && n <= 500 {
+				limit = n
+			}
+		}
+		entries := runner.GetQueryLog(limit)
+		if entries == nil {
+			entries = []querylog.Entry{}
+		}
+		_ = json.NewEncoder(w).Encode(entries)
+	})
+
+	srv.Mux.HandleFunc("POST /api/block", func(w http.ResponseWriter, r *http.Request) {
+		setCORS(w)
+		w.Header().Set("Content-Type", "application/json")
+		var body struct {
+			Domain string `json:"domain"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			writeJSON(w, map[string]string{"error": "invalid body"}, http.StatusBadRequest)
+			return
+		}
+		domain := strings.TrimSpace(strings.ToLower(body.Domain))
+		if domain == "" {
+			writeJSON(w, map[string]string{"error": "domain required"}, http.StatusBadRequest)
+			return
+		}
+		if err := bl.AddDomain(domain); err != nil {
+			writeJSON(w, map[string]string{"error": err.Error()}, http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, map[string]interface{}{"ok": true, "blocklist_count": bl.Count()}, http.StatusOK)
 	})
 
 	// Состояние фильтра: active, mode (dns | hosts), port.

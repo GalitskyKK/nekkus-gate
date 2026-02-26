@@ -239,12 +239,15 @@ func flushDNSCacheImpl() {
 	_ = cmd.Run()
 }
 
+const createNoWindow = 0x08000000 // CREATE_NO_WINDOW — консоль не создаётся, не моргает.
+
 // hideWindow скрывает консольное окно дочернего процесса (PowerShell/CMD не моргают).
 func hideWindow(cmd *exec.Cmd) {
 	if cmd.SysProcAttr == nil {
 		cmd.SysProcAttr = &syscall.SysProcAttr{}
 	}
 	cmd.SysProcAttr.HideWindow = true
+	cmd.SysProcAttr.CreationFlags = createNoWindow
 }
 
 func setSystemDNS(adapter string, useDHCP bool, servers []string, dataDir string) error {

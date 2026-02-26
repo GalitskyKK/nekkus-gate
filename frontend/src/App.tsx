@@ -13,14 +13,18 @@ import {
   fetchFilterStatus,
   fetchTopBlocked,
   fetchPortCheck,
+  fetchQueries,
   enableFilter,
   disableFilter,
+  blockDomain,
   type GateStats,
   type TopBlockedEntry,
   type PortCheck,
+  type QueryLogEntry,
 } from './api'
 
 const REFRESH_MS = 3000
+const QUERIES_REFRESH_MS = 2000
 
 function formatNumber(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
@@ -37,6 +41,8 @@ export default function App() {
   const [filterBusy, setFilterBusy] = useState(false)
   const [filterError, setFilterError] = useState<string | null>(null)
   const [portCheck, setPortCheck] = useState<PortCheck | null>(null)
+  const [queries, setQueries] = useState<QueryLogEntry[]>([])
+  const [blockingDomain, setBlockingDomain] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
 
   const load = useCallback(async () => {
@@ -59,6 +65,15 @@ export default function App() {
     }
   }, [])
 
+  const loadQueries = useCallback(async () => {
+    try {
+      const list = await fetchQueries(80)
+      setQueries(list)
+    } catch {
+      setQueries([])
+    }
+  }, [])
+
   const toggleFilter = useCallback(async () => {
     if (filterBusy || filterActive === null) return
     setFilterBusy(true)
@@ -72,6 +87,7 @@ export default function App() {
         setFilterActive(true)
         setFilterActiveMode(res.mode === 'hosts' ? 'hosts' : 'dns')
       }
+      await load()
     } catch (e) {
       setFilterError(e instanceof Error ? e.message : 'Ошибка переключения фильтра')
     } finally {
@@ -79,11 +95,28 @@ export default function App() {
     }
   }, [filterActive, filterBusy])
 
+  const handleBlockDomain = useCallback(async (domain: string) => {
+    const normalized = domain.replace(/\.$/,'').trim().toLowerCase()
+    if (!normalized || blockingDomain) return
+    setBlockingDomain(normalized)
+    try {
+      await blockDomain(normalized)
+      await Promise.all([load(), loadQueries()])
+    } finally {
+      setBlockingDomain(null)
+    }
+  }, [load, loadQueries, blockingDomain])
+
   useEffect(() => {
     load()
+    loadQueries()
     const t = setInterval(load, REFRESH_MS)
-    return () => clearInterval(t)
-  }, [load])
+    const tq = setInterval(loadQueries, QUERIES_REFRESH_MS)
+    return () => {
+      clearInterval(t)
+      clearInterval(tq)
+    }
+  }, [load, loadQueries])
 
   if (error) {
     return (
@@ -175,8 +208,8 @@ export default function App() {
               </Card>
               <Card variant="elevated" moduleGlow="gate" className="nekkus-glass-card gate-card gate-card--hero">
                 <div className="gate-value">{stats.blocked_percent.toFixed(1)}%</div>
-                <div className="gate-label">Блокировка</div>
-                <div className="gate-extra">доля от запросов</div>
+                <div className="gate-label">Приватность</div>
+                <div className="gate-extra">доля блокировки запросов</div>
               </Card>
               <Card variant="elevated" moduleGlow="gate" className="nekkus-glass-card gate-card gate-card--hero">
                 <div className="gate-value">{stats.blocklist_count}</div>
@@ -184,6 +217,59 @@ export default function App() {
                 <div className="gate-extra">в блок-листе</div>
               </Card>
             </div>
+          </Section>
+
+          <Section title="Последние запросы">
+            <Card variant="default" className="nekkus-glass-card gate-card gate-queries-card">
+              <div className="gate-queries-table-wrap">
+                <table className="gate-queries-table" role="grid">
+                  <thead>
+                    <tr>
+                      <th scope="col">Время</th>
+                      <th scope="col">Домен</th>
+                      <th scope="col">Тип</th>
+                      <th scope="col">Статус</th>
+                      <th scope="col" aria-label="Действия" />
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {queries.length === 0 ? (
+                      <tr>
+                        <td colSpan={5} className="gate-queries-empty">
+                          Нет записей. Включите фильтр и откройте сайты — запросы появятся здесь.
+                        </td>
+                      </tr>
+                    ) : (
+                      queries.map((q, i) => (
+                        <tr key={`${q.domain}-${q.timestamp}-${i}`}>
+                          <td className="gate-queries-time">
+                            {q.timestamp ? new Date(q.timestamp).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : '—'}
+                          </td>
+                          <td className="gate-queries-domain">{q.domain?.replace(/\.$/,'') || '—'}</td>
+                          <td className="gate-queries-type">{q.type || '—'}</td>
+                          <td>
+                            <span className={`gate-queries-status gate-queries-status--${q.blocked ? 'blocked' : q.cached ? 'cached' : 'allowed'}`}>
+                              {q.blocked ? 'Заблокирован' : q.cached ? 'Кэш' : 'Разрешён'}
+                            </span>
+                          </td>
+                          <td>
+                            <Button
+                              variant="secondary"
+                              size="sm"
+                              onClick={() => handleBlockDomain(q.domain)}
+                              disabled={!!blockingDomain || q.blocked}
+                              aria-label={`Заблокировать ${q.domain}`}
+                            >
+                              {blockingDomain === (q.domain?.replace(/\.$/,'')?.toLowerCase()) ? '…' : 'Блок'}
+                            </Button>
+                          </td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </Card>
           </Section>
 
           {topBlocked.length > 0 && (

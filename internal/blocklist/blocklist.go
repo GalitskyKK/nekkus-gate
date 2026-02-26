@@ -86,3 +86,29 @@ func (b *Blocklist) Path() string {
 	defer b.mu.RUnlock()
 	return b.path
 }
+
+// AddDomain добавляет домен в список и сохраняет в файл (для блокировки из UI).
+func (b *Blocklist) AddDomain(domain string) error {
+	domain = strings.TrimSpace(strings.ToLower(domain))
+	if domain == "" {
+		return nil
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.path == "" {
+		return nil
+	}
+	b.set[domain] = struct{}{}
+	// Перезаписать файл: все домены из set, по одному на строку.
+	f, err := os.Create(b.path)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	for d := range b.set {
+		if _, err := f.WriteString(d + "\n"); err != nil {
+			return err
+		}
+	}
+	return nil
+}

@@ -115,3 +115,11 @@ func (r *DNSRunner) GetTopBlocked(n int) []TopBlockedEntry {
 	}
 	return out
 }
+
+// GetQueryLog возвращает последние n записей из лога DNS-запросов (новые первые).
+func (r *DNSRunner) GetQueryLog(n int) []querylog.Entry {
+	if r.qlog == nil || n <= 0 {
+		return nil
+	}
+	return r.qlog.Last(n)
+}

@@ -68,3 +68,31 @@ export async function fetchPortCheck(): Promise<PortCheck> {
   if (!res.ok) throw new Error(res.statusText)
   return res.json()
 }
+
+export interface QueryLogEntry {
+  timestamp: string
+  domain: string
+  type: string
+  blocked: boolean
+  cached: boolean
+  rule?: string
+  latency_ms: number
+}
+
+export async function fetchQueries(limit = 100): Promise<QueryLogEntry[]> {
+  const res = await fetch(`${BASE}/api/queries?limit=${limit}`)
+  if (!res.ok) throw new Error(res.statusText)
+  const data = await res.json()
+  return Array.isArray(data) ? data : []
+}
+
+export async function blockDomain(domain: string): Promise<{ ok: boolean; blocklist_count: number }> {
+  const res = await fetch(`${BASE}/api/block`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ domain: domain.replace(/\.$/,'') }),
+  })
+  const data = await res.json()
+  if (!res.ok) throw new Error((data as { error?: string }).error || res.statusText)
+  return data
+}
