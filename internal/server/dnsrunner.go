@@ -4,35 +4,41 @@ import (
 	"log"
 	"sync"
 
+	"github.com/GalitskyKK/nekkus-gate/internal/apptrack"
 	"github.com/GalitskyKK/nekkus-gate/internal/dns"
 	"github.com/GalitskyKK/nekkus-gate/internal/filter"
 	"github.com/GalitskyKK/nekkus-gate/internal/querylog"
 	"github.com/GalitskyKK/nekkus-gate/internal/stats"
 	"github.com/GalitskyKK/nekkus-gate/internal/store"
+	"github.com/GalitskyKK/nekkus-gate/internal/trackers"
 )
 
 // DNSRunner перезапускает DNS-сервер на другом порту (53 при включении фильтра, defaultPort при выключении).
 type DNSRunner struct {
-	mu     sync.Mutex
-	srv    *dns.Server
-	engine *filter.Engine
-	st     *stats.Stats
-	config *store.Config
-	qlog   *querylog.Log
-	port   int
+	mu          sync.Mutex
+	srv         *dns.Server
+	engine      *filter.Engine
+	st          *stats.Stats
+	config      *store.Config
+	qlog        *querylog.Log
+	knownTrack  *trackers.KnownTrackers
+	appResolver apptrack.Resolver
+	port        int
 }
 
 const cacheMaxSize = 2000
 const cacheTTLMinSec = 60
 const cacheTTLMaxSec = 3600
 
-// NewDNSRunner создаёт раннер DNS с движком фильтрации, статистикой, конфигом и логом запросов.
-func NewDNSRunner(engine *filter.Engine, st *stats.Stats, config *store.Config, qlog *querylog.Log) *DNSRunner {
+// NewDNSRunner создаёт раннер DNS с движком фильтрации, статистикой, конфигом, логом и опционально trackers/appResolver.
+func NewDNSRunner(engine *filter.Engine, st *stats.Stats, config *store.Config, qlog *querylog.Log, knownTrack *trackers.KnownTrackers, appResolver apptrack.Resolver) *DNSRunner {
 	return &DNSRunner{
-		engine: engine,
-		st:     st,
-		config: config,
-		qlog:   qlog,
+		engine:      engine,
+		st:          st,
+		config:      config,
+		qlog:        qlog,
+		knownTrack:  knownTrack,
+		appResolver: appResolver,
 	}
 }
 
@@ -45,7 +51,7 @@ func (r *DNSRunner) Start(port int) {
 	}
 	cache := dns.NewCache(cacheMaxSize, cacheTTLMinSec, cacheTTLMaxSec)
 	upstream := dns.NewUpstreamResolver(r.config.GetUpstreams())
-	srv := dns.NewServer(addr, cache, upstream, r.engine, r.qlog, r.st)
+	srv := dns.NewServer(addr, cache, upstream, r.engine, r.qlog, r.st, r.knownTrack, r.appResolver)
 	r.mu.Lock()
 	r.srv = srv
 	r.port = port
@@ -122,4 +128,12 @@ func (r *DNSRunner) GetQueryLog(n int) []querylog.Entry {
 		return nil
 	}
 	return r.qlog.Last(n)
+}
+
+// GetPrivacyStats возвращает глобальную и per-app статистику по трекерам (из последних 5000 записей).
+func (r *DNSRunner) GetPrivacyStats() (global querylog.PrivacyStats, apps []querylog.AppPrivacyStats) {
+	if r.qlog == nil {
+		return querylog.PrivacyStats{}, nil
+	}
+	return r.qlog.PrivacyFromLast(5000)
 }

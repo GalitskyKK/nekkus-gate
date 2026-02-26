@@ -19,6 +19,7 @@ import (
 	coreserver "github.com/GalitskyKK/nekkus-core/pkg/server"
 	pb "github.com/GalitskyKK/nekkus-core/pkg/protocol"
 
+	"github.com/GalitskyKK/nekkus-gate/internal/apptrack"
 	"github.com/GalitskyKK/nekkus-gate/internal/blocklist"
 	"github.com/GalitskyKK/nekkus-gate/internal/filter"
 	"github.com/GalitskyKK/nekkus-gate/internal/hostsfilter"
@@ -29,6 +30,7 @@ import (
 	"github.com/GalitskyKK/nekkus-gate/internal/stats"
 	"github.com/GalitskyKK/nekkus-gate/internal/store"
 	"github.com/GalitskyKK/nekkus-gate/internal/sysdns"
+	"github.com/GalitskyKK/nekkus-gate/internal/trackers"
 	"github.com/GalitskyKK/nekkus-gate/ui"
 
 	"google.golang.org/grpc"
@@ -103,6 +105,16 @@ func main() {
 	}
 	engine := filter.New(bl, cfg)
 	qlog := querylog.New(500)
+	knownTrackers := trackers.New()
+	knownTrackers.LoadBuiltin()
+	if cfg.TrackerListURL != "" {
+		if err := knownTrackers.LoadFromURL(cfg.TrackerListURL, dataDir, "trackers_cache.txt"); err != nil {
+			log.Printf("trackers from URL: %v", err)
+		} else {
+			log.Printf("trackers loaded from URL: %d total", knownTrackers.Count())
+		}
+	}
+	appResolver := apptrack.NewResolver()
 
 	// Восстановление после краша: если остался lock — прошлый запуск не завершился, восстанавливаем DNS.
 	if hadLock, _ := recovery.CheckAndRecover(dataDir); hadLock {
@@ -122,7 +134,7 @@ func main() {
 		}
 	}
 
-	dnsRunner := server.NewDNSRunner(engine, st, cfg, qlog)
+	dnsRunner := server.NewDNSRunner(engine, st, cfg, qlog, knownTrackers, appResolver)
 	dnsRunner.Start(*dnsPort)
 	defer dnsRunner.Shutdown()
 

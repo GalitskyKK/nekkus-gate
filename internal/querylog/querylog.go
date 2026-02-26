@@ -14,6 +14,8 @@ type Entry struct {
 	Cached    bool      `json:"cached"`
 	Rule      string    `json:"rule,omitempty"`
 	LatencyMs int64     `json:"latency_ms"`
+	IsTracker bool      `json:"is_tracker"` // домен из базы известных трекеров
+	AppName   string    `json:"app_name,omitempty"` // процесс (по source port), если определён
 }
 
 // Log — кольцевой буфер последних запросов. Потокобезопасно.
@@ -65,6 +67,79 @@ func (l *Log) Last(n int) []Entry {
 		out = append(out, e)
 	}
 	return out
+}
+
+// PrivacyStats — агрегат по трекерам для глобального Privacy Score.
+type PrivacyStats struct {
+	TrackerQueries  int     // запросов к известным трекерам
+	TrackerBlocked  int     // из них заблокировано
+	Score           int     // 0–100: (TrackerBlocked/TrackerQueries)*100, или 100 если трекеров не было
+	TotalQueries    int     // всего запросов (для контекста)
+}
+
+// AppPrivacyStats — статистика по одному приложению.
+type AppPrivacyStats struct {
+	AppName         string `json:"app_name"`
+	Score           int    `json:"score"`             // 0–100
+	TotalQueries    int    `json:"total_queries"`
+	TrackerQueries  int    `json:"tracker_queries"`
+	TrackerBlocked  int   `json:"tracker_blocked"`
+}
+
+// PrivacyFromLast вычисляет глобальную и per-app статистику по последним maxEntries записям.
+func (l *Log) PrivacyFromLast(maxEntries int) (global PrivacyStats, apps []AppPrivacyStats) {
+	entries := l.Last(maxEntries)
+	global.TotalQueries = len(entries)
+	appMap := make(map[string]*struct {
+		total, tracker, blocked int
+	})
+	for _, e := range entries {
+		if e.IsTracker {
+			global.TrackerQueries++
+			if e.Blocked {
+				global.TrackerBlocked++
+			}
+		}
+		appName := e.AppName
+		if appName == "" {
+			appName = "(unknown)"
+		}
+		if _, ok := appMap[appName]; !ok {
+			appMap[appName] = &struct{ total, tracker, blocked int }{}
+		}
+		appMap[appName].total++
+		if e.IsTracker {
+			appMap[appName].tracker++
+			if e.Blocked {
+				appMap[appName].blocked++
+			}
+		}
+	}
+	if global.TrackerQueries > 0 {
+		global.Score = int(float64(global.TrackerBlocked)/float64(global.TrackerQueries)*100 + 0.5)
+	} else {
+		global.Score = 100
+	}
+	if global.Score > 100 {
+		global.Score = 100
+	}
+	for name, st := range appMap {
+		score := 100
+		if st.tracker > 0 {
+			score = int(float64(st.blocked)/float64(st.tracker)*100 + 0.5)
+			if score > 100 {
+				score = 100
+			}
+		}
+		apps = append(apps, AppPrivacyStats{
+			AppName:        name,
+			Score:          score,
+			TotalQueries:   st.total,
+			TrackerQueries: st.tracker,
+			TrackerBlocked: st.blocked,
+		})
+	}
+	return global, apps
 }
 
 // TopBlocked возвращает топ n заблокированных доменов по количеству запросов (из последних записей).

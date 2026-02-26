@@ -77,6 +77,8 @@ export interface QueryLogEntry {
   cached: boolean
   rule?: string
   latency_ms: number
+  is_tracker?: boolean
+  app_name?: string
 }
 
 export async function fetchQueries(limit = 100): Promise<QueryLogEntry[]> {
@@ -95,4 +97,34 @@ export async function blockDomain(domain: string): Promise<{ ok: boolean; blockl
   const data = await res.json()
   if (!res.ok) throw new Error((data as { error?: string }).error || res.statusText)
   return data
+}
+
+export interface PrivacyData {
+  score: number
+  total_queries: number
+  tracker_queries: number
+  tracker_blocked: number
+  blocked_percent: number
+  top_blocked: TopBlockedEntry[]
+}
+
+export async function fetchPrivacy(): Promise<PrivacyData> {
+  const res = await fetch(`${BASE}/api/privacy`)
+  if (!res.ok) throw new Error(res.statusText)
+  return res.json()
+}
+
+export interface AppPrivacyStats {
+  app_name: string
+  score: number
+  total_queries: number
+  tracker_queries: number
+  tracker_blocked: number
+}
+
+export async function fetchPrivacyApps(): Promise<AppPrivacyStats[]> {
+  const res = await fetch(`${BASE}/api/privacy/apps`)
+  if (!res.ok) throw new Error(res.statusText)
+  const data = await res.json()
+  return Array.isArray(data) ? data : []
 }

@@ -6,9 +6,11 @@ import (
 	"net"
 	"sync"
 
+	"github.com/GalitskyKK/nekkus-gate/internal/apptrack"
 	"github.com/GalitskyKK/nekkus-gate/internal/filter"
 	"github.com/GalitskyKK/nekkus-gate/internal/querylog"
 	"github.com/GalitskyKK/nekkus-gate/internal/stats"
+	"github.com/GalitskyKK/nekkus-gate/internal/trackers"
 	"github.com/miekg/dns"
 )
 
@@ -22,9 +24,9 @@ type Server struct {
 }
 
 // NewServer создаёт DNS-сервер. addr — listen (например "127.0.0.1:53").
-// cache, upstream, engine, qlog, st — общие компоненты.
-func NewServer(addr string, cache *Cache, upstream *UpstreamResolver, engine *filter.Engine, qlog *querylog.Log, st *stats.Stats) *Server {
-	handler := NewHandler(cache, upstream, engine, qlog, st)
+// knownTrack и appResolver — для лога (is_tracker, app_name); могут быть nil.
+func NewServer(addr string, cache *Cache, upstream *UpstreamResolver, engine *filter.Engine, qlog *querylog.Log, st *stats.Stats, knownTrack *trackers.KnownTrackers, appResolver apptrack.Resolver) *Server {
+	handler := NewHandler(cache, upstream, engine, qlog, st, knownTrack, appResolver)
 	return &Server{
 		addr:    addr,
 		handler: handler,

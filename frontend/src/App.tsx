@@ -14,6 +14,8 @@ import {
   fetchTopBlocked,
   fetchPortCheck,
   fetchQueries,
+  fetchPrivacy,
+  fetchPrivacyApps,
   enableFilter,
   disableFilter,
   blockDomain,
@@ -21,6 +23,8 @@ import {
   type TopBlockedEntry,
   type PortCheck,
   type QueryLogEntry,
+  type PrivacyData,
+  type AppPrivacyStats,
 } from './api'
 
 const REFRESH_MS = 3000
@@ -42,17 +46,21 @@ export default function App() {
   const [filterError, setFilterError] = useState<string | null>(null)
   const [portCheck, setPortCheck] = useState<PortCheck | null>(null)
   const [queries, setQueries] = useState<QueryLogEntry[]>([])
+  const [privacy, setPrivacy] = useState<PrivacyData | null>(null)
+  const [privacyApps, setPrivacyApps] = useState<AppPrivacyStats[]>([])
   const [blockingDomain, setBlockingDomain] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
 
   const load = useCallback(async () => {
     try {
       setError(null)
-      const [s, t, f, pc] = await Promise.all([
+      const [s, t, f, pc, pr, prApps] = await Promise.all([
         fetchStats(),
         fetchTopBlocked(10).catch(() => []),
         fetchFilterStatus().catch(() => ({ active: false, mode: 'dns' as const, port: 5354, blocklist_count: 0 })),
         fetchPortCheck().catch(() => ({ available: true })),
+        fetchPrivacy().catch(() => null),
+        fetchPrivacyApps().catch(() => []),
       ])
       setStats(s)
       setTopBlocked(t)
@@ -60,6 +68,8 @@ export default function App() {
       setFilterActiveMode((f.mode === 'hosts' ? 'hosts' : 'dns'))
       setFilterBlocklistCount(f.blocklist_count ?? 0)
       setPortCheck(pc)
+      setPrivacy(pr ?? null)
+      setPrivacyApps(Array.isArray(prApps) ? prApps : [])
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Ошибка загрузки')
     }
@@ -208,8 +218,8 @@ export default function App() {
               </Card>
               <Card variant="elevated" moduleGlow="gate" className="nekkus-glass-card gate-card gate-card--hero">
                 <div className="gate-value">{stats.blocked_percent.toFixed(1)}%</div>
-                <div className="gate-label">Приватность</div>
-                <div className="gate-extra">доля блокировки запросов</div>
+                <div className="gate-label">Блокировка</div>
+                <div className="gate-extra">доля от запросов</div>
               </Card>
               <Card variant="elevated" moduleGlow="gate" className="nekkus-glass-card gate-card gate-card--hero">
                 <div className="gate-value">{stats.blocklist_count}</div>
@@ -218,6 +228,88 @@ export default function App() {
               </Card>
             </div>
           </Section>
+
+          <Section title="Privacy Score">
+            <Card variant="elevated" moduleGlow="gate" className="nekkus-glass-card gate-card gate-privacy-card">
+              <div className="gate-privacy-score-wrap">
+                <div
+                  className={`gate-privacy-score-value gate-privacy-score--${privacy ? (privacy.score >= 70 ? 'high' : privacy.score >= 40 ? 'mid' : 'low') : 'none'}`}
+                  aria-label={`Privacy Score: ${privacy?.score ?? 0} из 100`}
+                >
+                  {privacy != null ? privacy.score : '—'}
+                </div>
+                <div className="gate-privacy-score-label">из 100</div>
+                <p className="gate-privacy-score-desc">
+                  Защита от известных трекеров: доля заблокированных запросов к трекерам. Чем выше — тем лучше.
+                </p>
+                {privacy != null && privacy.tracker_queries >= 0 && (
+                  <p className="gate-privacy-tracker-stats" role="status">
+                    Запросов к трекерам: {privacy.tracker_queries}, заблокировано: {privacy.tracker_blocked}
+                  </p>
+                )}
+                <div className="gate-privacy-bar" role="progressbar" aria-valuenow={privacy?.score ?? 0} aria-valuemin={0} aria-valuemax={100}>
+                  <div
+                    className={`gate-privacy-bar-fill gate-privacy-bar-fill--${privacy ? (privacy.score >= 70 ? 'high' : privacy.score >= 40 ? 'mid' : 'low') : 'none'}`}
+                    style={{ width: `${privacy?.score ?? 0}%` }}
+                  />
+                </div>
+              </div>
+              {privacy && privacy.top_blocked.length > 0 && (
+                <div className="gate-privacy-top">
+                  <div className="gate-privacy-top-title">Топ заблокированных (трекеры/реклама)</div>
+                  <ul className="gate-top-list">
+                    {privacy.top_blocked.map(({ domain, count }) => (
+                      <li key={domain}>
+                        <span className="gate-domain">{domain}</span>
+                        <span className="gate-count">{formatNumber(count)}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </Card>
+          </Section>
+
+          {privacyApps.length > 0 && (
+            <Section title="По приложениям">
+              <Card variant="default" className="nekkus-glass-card gate-card gate-apps-card">
+                <p className="gate-privacy-score-desc gate-apps-desc">
+                  Privacy Score по приложению: доля заблокированных запросов к трекерам от этого процесса.
+                </p>
+                <div className="gate-queries-table-wrap">
+                  <table className="gate-queries-table gate-apps-table" role="grid">
+                    <thead>
+                      <tr>
+                        <th scope="col">Приложение</th>
+                        <th scope="col">Score</th>
+                        <th scope="col">Запросов</th>
+                        <th scope="col">Трекеров</th>
+                        <th scope="col">Заблокировано</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {privacyApps
+                        .filter((a) => a.app_name && a.total_queries > 0)
+                        .sort((a, b) => b.tracker_queries - a.tracker_queries)
+                        .map((a) => (
+                          <tr key={a.app_name}>
+                            <td className="gate-queries-domain">{a.app_name}</td>
+                            <td>
+                              <span className={`gate-privacy-score-value gate-privacy-score--${a.score >= 70 ? 'high' : a.score >= 40 ? 'mid' : 'low'}`} style={{ fontSize: '1rem' }}>
+                                {a.score}
+                              </span>
+                            </td>
+                            <td>{formatNumber(a.total_queries)}</td>
+                            <td>{formatNumber(a.tracker_queries)}</td>
+                            <td>{formatNumber(a.tracker_blocked)}</td>
+                          </tr>
+                        ))}
+                    </tbody>
+                  </table>
+                </div>
+              </Card>
+            </Section>
+          )}
 
           <Section title="Последние запросы">
             <Card variant="default" className="nekkus-glass-card gate-card gate-queries-card">

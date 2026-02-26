@@ -5,29 +5,42 @@ import (
 	"net"
 	"time"
 
+	"github.com/GalitskyKK/nekkus-gate/internal/apptrack"
 	"github.com/GalitskyKK/nekkus-gate/internal/filter"
 	"github.com/GalitskyKK/nekkus-gate/internal/querylog"
 	"github.com/GalitskyKK/nekkus-gate/internal/stats"
+	"github.com/GalitskyKK/nekkus-gate/internal/trackers"
 	"github.com/miekg/dns"
 )
 
 // Handler обрабатывает DNS-запросы: фильтр → кэш → upstream, логирует в querylog и stats.
 type Handler struct {
-	cache    *Cache
-	upstream *UpstreamResolver
-	engine   *filter.Engine
-	qlog     *querylog.Log
-	stats    *stats.Stats
+	cache       *Cache
+	upstream    *UpstreamResolver
+	engine      *filter.Engine
+	qlog        *querylog.Log
+	stats       *stats.Stats
+	knownTrack  *trackers.KnownTrackers
+	appResolver apptrack.Resolver
 }
 
 // NewHandler создаёт обработчик DNS.
-func NewHandler(cache *Cache, upstream *UpstreamResolver, engine *filter.Engine, qlog *querylog.Log, st *stats.Stats) *Handler {
+func NewHandler(cache *Cache, upstream *UpstreamResolver, engine *filter.Engine, qlog *querylog.Log, st *stats.Stats, knownTrack *trackers.KnownTrackers, appResolver apptrack.Resolver) *Handler {
+	if knownTrack == nil {
+		knownTrack = trackers.New()
+		knownTrack.LoadBuiltin()
+	}
+	if appResolver == nil {
+		appResolver = apptrack.NoopResolver{}
+	}
 	return &Handler{
-		cache:    cache,
-		upstream: upstream,
-		engine:   engine,
-		qlog:     qlog,
-		stats:    st,
+		cache:       cache,
+		upstream:    upstream,
+		engine:      engine,
+		qlog:        qlog,
+		stats:       st,
+		knownTrack:  knownTrack,
+		appResolver: appResolver,
 	}
 }
 
@@ -48,6 +61,8 @@ func (h *Handler) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 	}
 
 	domain := dns.Fqdn(name)
+	isTracker := h.knownTrack.Contains(domain)
+	appName := h.appResolver.Lookup(clientAddr)
 	blocked, rule := h.engine.Check(domain)
 	if blocked {
 		h.stats.IncTotal()
@@ -55,12 +70,14 @@ func (h *Handler) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 		reply := h.buildBlockedResponse(r, q)
 		_ = w.WriteMsg(reply)
 		h.qlog.Append(querylog.Entry{
-			Timestamp: start,
-			Domain:    domain,
-			Type:      typeStr,
-			Blocked:   true,
-			Rule:      rule,
-			LatencyMs: time.Since(start).Milliseconds(),
+			Timestamp:  start,
+			Domain:     domain,
+			Type:       typeStr,
+			Blocked:    true,
+			Rule:       rule,
+			LatencyMs:  time.Since(start).Milliseconds(),
+			IsTracker:  isTracker,
+			AppName:    appName,
 		})
 		return
 	}
@@ -70,12 +87,14 @@ func (h *Handler) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 		_ = w.WriteMsg(cached)
 		h.stats.IncTotal()
 		h.qlog.Append(querylog.Entry{
-			Timestamp: start,
-			Domain:    domain,
-			Type:      typeStr,
-			Blocked:   false,
-			Cached:    true,
-			LatencyMs: time.Since(start).Milliseconds(),
+			Timestamp:  start,
+			Domain:     domain,
+			Type:       typeStr,
+			Blocked:    false,
+			Cached:     true,
+			LatencyMs:  time.Since(start).Milliseconds(),
+			IsTracker:  isTracker,
+			AppName:    appName,
 		})
 		return
 	}
@@ -98,12 +117,14 @@ func (h *Handler) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 	_ = w.WriteMsg(resp)
 	h.stats.IncTotal()
 	h.qlog.Append(querylog.Entry{
-		Timestamp: start,
-		Domain:    domain,
-		Type:      typeStr,
-		Blocked:   false,
-		Cached:    false,
-		LatencyMs: time.Since(start).Milliseconds(),
+		Timestamp:  start,
+		Domain:     domain,
+		Type:       typeStr,
+		Blocked:    false,
+		Cached:     false,
+		LatencyMs:  time.Since(start).Milliseconds(),
+		IsTracker:  isTracker,
+		AppName:    appName,
 	})
 }
 

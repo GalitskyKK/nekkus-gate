@@ -91,6 +91,38 @@ func RegisterRoutes(srv *coreserver.Server, st *stats.Stats, bl *blocklist.Block
 		_ = json.NewEncoder(w).Encode(platform.CheckPort53())
 	})
 
+	srv.Mux.HandleFunc("GET /api/privacy", func(w http.ResponseWriter, _ *http.Request) {
+		setCORS(w)
+		w.Header().Set("Content-Type", "application/json")
+		global, _ := runner.GetPrivacyStats()
+		top := runner.GetTopBlocked(10)
+		if top == nil {
+			top = []TopBlockedEntry{}
+		}
+		var blockedPct float64
+		if global.TrackerQueries > 0 {
+			blockedPct = float64(global.TrackerBlocked) / float64(global.TrackerQueries) * 100
+		}
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"score":             global.Score,
+			"total_queries":    global.TotalQueries,
+			"tracker_queries":  global.TrackerQueries,
+			"tracker_blocked":  global.TrackerBlocked,
+			"blocked_percent":  blockedPct,
+			"top_blocked":      top,
+		})
+	})
+
+	srv.Mux.HandleFunc("GET /api/privacy/apps", func(w http.ResponseWriter, _ *http.Request) {
+		setCORS(w)
+		w.Header().Set("Content-Type", "application/json")
+		_, apps := runner.GetPrivacyStats()
+		if apps == nil {
+			apps = []querylog.AppPrivacyStats{}
+		}
+		_ = json.NewEncoder(w).Encode(apps)
+	})
+
 	srv.Mux.HandleFunc("GET /api/queries", func(w http.ResponseWriter, r *http.Request) {
 		setCORS(w)
 		w.Header().Set("Content-Type", "application/json")

@@ -7,12 +7,13 @@ import (
 	"sync"
 )
 
-// Config — настройки Gate (upstream DNS, кастомные правила).
+// Config — настройки Gate (upstream DNS, кастомные правила, опция списка трекеров).
 type Config struct {
-	Upstreams []string     `json:"upstreams"` // ["8.8.8.8", "https://1.1.1.1/dns-query"]
-	Rules     []RuleEntry  `json:"rules"`     // block/allow по домену
-	mu        sync.RWMutex
-	path      string
+	Upstreams      []string    `json:"upstreams"`       // ["8.8.8.8", "https://1.1.1.1/dns-query"]
+	Rules          []RuleEntry `json:"rules"`          // block/allow по домену
+	TrackerListURL string      `json:"tracker_list_url"` // опционально: URL списка трекеров (AdGuard/hosts)
+	mu             sync.RWMutex
+	path           string
 }
 
 // RuleEntry — одно правило: блокировать или разрешить домен (поддержка wildcard *.).
