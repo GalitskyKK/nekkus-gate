@@ -28,7 +28,7 @@ func SetSystemDNS(adapter string, useDHCP bool, servers []string, dataDir string
 }
 
 // Enable сохраняет текущее DNS в dataDir и переключает систему на 127.0.0.1 (Gate).
-// Требуются права администратора. Перед сохранением выставляется Mode=ModeDNS.
+// Требуются права администратора. На Windows ставит 127.0.0.1 на все подключённые интерфейсы.
 func Enable(dataDir string) error {
 	state, err := getCurrent()
 	if err != nil {
@@ -41,7 +41,16 @@ func Enable(dataDir string) error {
 	if err := prepareForEnable(dataDir); err != nil {
 		return err
 	}
-	return setSystemDNS(state.Adapter, false, []string{"127.0.0.1"}, dataDir)
+	adapters := state.Adapters
+	if len(adapters) == 0 {
+		adapters = []string{state.Adapter}
+	}
+	for _, adapter := range adapters {
+		if err := setSystemDNS(adapter, false, []string{"127.0.0.1"}, dataDir); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // Disable восстанавливает настройки из сохранённого состояния: DNS (mode=dns) или только hosts (mode=hosts).
@@ -58,16 +67,22 @@ func Disable(dataDir string) error {
 		// Восстановление hosts делается в API (hostsfilter.Disable). Здесь только удаляем наш state-файл.
 		return RemoveBackup(dataDir)
 	}
-	// mode=dns (или пустой для совместимости)
-	if state.Platform == "linux" {
-		err = setSystemDNS(state.Adapter, true, nil, dataDir)
-	} else if state.WasDHCP {
-		err = setSystemDNS(state.Adapter, true, nil, dataDir)
-	} else {
-		err = setSystemDNS(state.Adapter, false, state.Servers, dataDir)
+	// mode=dns (или пустой для совместимости) — восстанавливаем все адаптеры, на которых меняли DNS.
+	adapters := state.Adapters
+	if len(adapters) == 0 {
+		adapters = []string{state.Adapter}
 	}
-	if err != nil {
-		return err
+	for _, adapter := range adapters {
+		if state.Platform == "linux" {
+			err = setSystemDNS(adapter, true, nil, dataDir)
+		} else if state.WasDHCP {
+			err = setSystemDNS(adapter, true, nil, dataDir)
+		} else {
+			err = setSystemDNS(adapter, false, state.Servers, dataDir)
+		}
+		if err != nil {
+			return err
+		}
 	}
 	cleanupAfterDisable(dataDir)
 	return RemoveBackup(dataDir)

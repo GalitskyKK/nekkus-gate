@@ -18,14 +18,46 @@ func getCurrent() (*State, error) {
 	if err != nil {
 		return nil, fmt.Errorf("netsh show config: %w", err)
 	}
-	// Единый перенос строк для парсинга (Windows даёт \r\n)
 	out = bytes.ReplaceAll(out, []byte("\r\n"), []byte("\n"))
 	state, err := parseNetshConfig(out)
 	if err != nil {
 		return nil, err
 	}
 	state.Platform = "windows"
+	// Список подключённых интерфейсов для установки DNS на все (надёжнее, чем один по show config).
+	connected := getConnectedInterfaceNames()
+	if len(connected) > 0 {
+		state.Adapters = connected
+	} else {
+		state.Adapters = []string{state.Adapter}
+	}
 	return state, nil
+}
+
+// getConnectedInterfaceNames возвращает имена интерфейсов в состоянии "Connected" из "netsh interface show interface".
+func getConnectedInterfaceNames() []string {
+	cmd := exec.Command("netsh", "interface", "show", "interface")
+	cmd.Stderr = nil
+	out, err := cmd.Output()
+	if err != nil {
+		return nil
+	}
+	lines := strings.Split(strings.ReplaceAll(string(out), "\r\n", "\n"), "\n")
+	var names []string
+	for _, line := range lines {
+		if !strings.Contains(line, "Connected") {
+			continue
+		}
+		// Колонки: Admin State, State, Type, Interface Name (последняя может содержать пробелы).
+		parts := regexp.MustCompile(`\s{2,}`).Split(strings.TrimSpace(line), -1)
+		if len(parts) >= 4 {
+			name := strings.TrimSpace(strings.Join(parts[3:], " "))
+			if name != "" {
+				names = append(names, name)
+			}
+		}
+	}
+	return names
 }
 
 // parseNetshConfig разбирает вывод "netsh interface ipv4 show config".
@@ -195,6 +227,9 @@ func setSystemDNS(adapter string, useDHCP bool, servers []string, dataDir string
 		if out2, err := cmd.CombinedOutput(); err != nil {
 			return fmt.Errorf("netsh add dns index: %w (%s)", err, bytes.TrimSpace(out2))
 		}
+	}
+	if !useDHCP {
+		_ = exec.Command("ipconfig", "/flushdns").Run()
 	}
 	return nil
 }

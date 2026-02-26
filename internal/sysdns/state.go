@@ -20,8 +20,10 @@ type State struct {
 	WasDHCP bool `json:"was_dhcp"`
 	// Servers — сохранённые адреса DNS (если не DHCP). Только для mode=dns.
 	Servers []string `json:"servers,omitempty"`
-	// Adapter — идентификатор адаптера/интерфейса (платформо-специфичный). Только для mode=dns.
+	// Adapter — идентификатор адаптера (один, для совместимости). Только для mode=dns.
 	Adapter string `json:"adapter,omitempty"`
+	// Adapters — список адаптеров, на которых меняли DNS (восстанавливаем все). Только для mode=dns.
+	Adapters []string `json:"adapters,omitempty"`
 	// Platform — windows, darwin, linux (для отладки).
 	Platform string `json:"platform,omitempty"`
 }
