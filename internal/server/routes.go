@@ -9,6 +9,8 @@ import (
 	"time"
 
 	coreserver "github.com/GalitskyKK/nekkus-core/pkg/server"
+	"os"
+
 	"github.com/GalitskyKK/nekkus-gate/internal/blocklist"
 	"github.com/GalitskyKK/nekkus-gate/internal/hostsfilter"
 	"github.com/GalitskyKK/nekkus-gate/internal/platform"
@@ -207,12 +209,26 @@ func RegisterRoutes(srv *coreserver.Server, st *stats.Stats, bl *blocklist.Block
 		// Пробуем порт 53. Если свободен — режим DNS (системный DNS → 127.0.0.1, Gate на 53).
 		// Если занят — режим hosts: дописываем блок-лист в hosts, ничего не останавливаем.
 		if err := tryListenUDP53(); err == nil {
+			if !platform.IsAdmin() {
+				msg := "Для смены системного DNS нужны права администратора. "
+				if os.Getenv("NEKKUS_HUB_ADDR") != "" {
+					msg += "Gate запущен из Hub. Запустите Nekkus Hub от имени администратора (ПКМ по ярлыку → «Запуск от имени администратора»), затем остановите Gate в Hub и запустите снова. Либо один раз запустите Nekkus Gate отдельно от имени администратора (ПКМ по nekkus-gate.exe → «Запуск от имени администратора»), нажмите «Включить» — настройки сохранятся, при следующих запусках из Hub фильтр будет уже включён."
+				} else {
+					msg += "ПКМ по программе → «Запуск от имени администратора», затем снова нажмите «Включить»."
+				}
+				writeJSON(w, map[string]string{"error": msg}, http.StatusForbidden)
+				return
+			}
 			if err := sysdns.Enable(dataDir); err != nil {
 				msg := err.Error()
 				if strings.Contains(strings.ToLower(msg), "access is denied") ||
 					strings.Contains(strings.ToLower(msg), "отказано в доступе") ||
 					strings.Contains(strings.ToLower(msg), "denied") {
-					msg = "Запустите Gate от имени администратора: ПКМ по программе → «Запуск от имени администратора», затем снова нажмите «Включить»."
+					if os.Getenv("NEKKUS_HUB_ADDR") != "" {
+						msg = "Недостаточно прав. Gate запущен из Hub. Запустите Nekkus Hub от имени администратора (ПКМ → «Запуск от имени администратора»), остановите и снова запустите Gate в Hub. Либо один раз запустите Nekkus Gate отдельно от имени администратора и нажмите «Включить» — настройки сохранятся в %APPDATA%\\nekkus\\gate."
+					} else {
+						msg = "Запустите Gate от имени администратора: ПКМ по программе → «Запуск от имени администратора», затем снова нажмите «Включить»."
+					}
 				}
 				writeJSON(w, map[string]string{"error": msg}, http.StatusInternalServerError)
 				return
@@ -232,7 +248,11 @@ func RegisterRoutes(srv *coreserver.Server, st *stats.Stats, bl *blocklist.Block
 				strings.Contains(strings.ToLower(msg), "отказано") ||
 				strings.Contains(strings.ToLower(msg), "denied") ||
 				strings.Contains(strings.ToLower(msg), "permission") {
-				msg = "Запустите Gate от имени администратора, затем снова нажмите «Включить»."
+				if os.Getenv("NEKKUS_HUB_ADDR") != "" {
+					msg = "Недостаточно прав для записи в hosts. Запустите Hub от имени администратора и перезапустите Gate в Hub, либо один раз включите фильтр в отдельном окне Gate (от имени администратора)."
+				} else {
+					msg = "Запустите Gate от имени администратора, затем снова нажмите «Включить»."
+				}
 			}
 			writeJSON(w, map[string]string{"error": msg}, http.StatusInternalServerError)
 			return
