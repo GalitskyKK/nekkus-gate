@@ -24,17 +24,42 @@ func getCurrent() (*State, error) {
 		return nil, err
 	}
 	state.Platform = "windows"
-	// Список подключённых интерфейсов для установки DNS на все (надёжнее, чем один по show config).
+	// Сначала — все подключённые из "netsh interface show interface" (англ. Connected / рус. Подключено).
 	connected := getConnectedInterfaceNames()
 	if len(connected) > 0 {
 		state.Adapters = connected
 	} else {
-		state.Adapters = []string{state.Adapter}
+		// Иначе — все адаптеры с конфигом из show config (чтобы не промахнуться по локали).
+		allFromConfig := parseNetshConfigAllAdapters(out)
+		if len(allFromConfig) > 0 {
+			state.Adapters = allFromConfig
+		} else {
+			state.Adapters = []string{state.Adapter}
+		}
 	}
 	return state, nil
 }
 
-// getConnectedInterfaceNames возвращает имена интерфейсов в состоянии "Connected" из "netsh interface show interface".
+// parseNetshConfigAllAdapters возвращает имена всех адаптеров с конфигом из вывода "netsh interface ipv4 show config".
+func parseNetshConfigAllAdapters(out []byte) []string {
+	blocks := splitNetshBlocks(out)
+	var names []string
+	seen := make(map[string]bool)
+	for _, block := range blocks {
+		adapter := extractNetshAdapterName(block)
+		if adapter == "" || seen[adapter] {
+			continue
+		}
+		if !blockHasConfig(block) {
+			continue
+		}
+		seen[adapter] = true
+		names = append(names, adapter)
+	}
+	return names
+}
+
+// getConnectedInterfaceNames возвращает имена интерфейсов в состоянии "Connected"/"Подключено" из "netsh interface show interface".
 func getConnectedInterfaceNames() []string {
 	cmd := exec.Command("netsh", "interface", "show", "interface")
 	cmd.Stderr = nil
@@ -42,17 +67,19 @@ func getConnectedInterfaceNames() []string {
 	if err != nil {
 		return nil
 	}
-	lines := strings.Split(strings.ReplaceAll(string(out), "\r\n", "\n"), "\n")
+	text := strings.ReplaceAll(string(out), "\r\n", "\n")
+	lines := strings.Split(text, "\n")
 	var names []string
 	for _, line := range lines {
-		if !strings.Contains(line, "Connected") {
+		lower := strings.ToLower(line)
+		// Англ. Connected, рус. Подключено, нем. Verbunden и т.д.
+		if !strings.Contains(lower, "connected") && !strings.Contains(lower, "подключено") && !strings.Contains(lower, "verbunden") {
 			continue
 		}
-		// Колонки: Admin State, State, Type, Interface Name (последняя может содержать пробелы).
 		parts := regexp.MustCompile(`\s{2,}`).Split(strings.TrimSpace(line), -1)
 		if len(parts) >= 4 {
 			name := strings.TrimSpace(strings.Join(parts[3:], " "))
-			if name != "" {
+			if name != "" && !strings.Contains(strings.ToLower(name), "loopback") {
 				names = append(names, name)
 			}
 		}
@@ -207,6 +234,19 @@ func setSystemDNS(adapter string, useDHCP bool, servers []string, dataDir string
 	if adapter == "" {
 		return fmt.Errorf("adapter name is required")
 	}
+	// Пробуем netsh и PowerShell (на Windows 11 иногда срабатывает только один из них).
+	errN := setSystemDNSNetsh(adapter, useDHCP, servers)
+	errP := setSystemDNSPowerShell(adapter, useDHCP, servers)
+	if errN != nil && errP != nil {
+		return fmt.Errorf("netsh: %w; PowerShell: %v", errN, errP)
+	}
+	if !useDHCP {
+		_ = exec.Command("ipconfig", "/flushdns").Run()
+	}
+	return nil
+}
+
+func setSystemDNSNetsh(adapter string, useDHCP bool, servers []string) error {
 	adapterQuoted := `"` + adapter + `"`
 	var cmd *exec.Cmd
 	if useDHCP {
@@ -219,17 +259,41 @@ func setSystemDNS(adapter string, useDHCP bool, servers []string, dataDir string
 	}
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("netsh set dns: %w (%s)", err, bytes.TrimSpace(out))
+		return fmt.Errorf("%w (%s)", err, bytes.TrimSpace(out))
 	}
-	// Второй сервер и т.д. — index=1,2 (если нужно, можно добавить)
 	for i := 1; i < len(servers); i++ {
 		cmd = exec.Command("netsh", "interface", "ipv4", "add", "dns", "name="+adapterQuoted, servers[i], strconv.Itoa(i+1))
 		if out2, err := cmd.CombinedOutput(); err != nil {
-			return fmt.Errorf("netsh add dns index: %w (%s)", err, bytes.TrimSpace(out2))
+			return fmt.Errorf("netsh add dns: %w (%s)", err, bytes.TrimSpace(out2))
 		}
 	}
-	if !useDHCP {
-		_ = exec.Command("ipconfig", "/flushdns").Run()
+	return nil
+}
+
+func setSystemDNSPowerShell(adapter string, useDHCP bool, servers []string) error {
+	if useDHCP {
+		// Reset to DHCP
+		script := fmt.Sprintf(`Set-DnsClientServerAddress -InterfaceAlias %q -ResetServerAddresses`, adapter)
+		cmd := exec.Command("powershell", "-NoProfile", "-NonInteractive", "-Command", script)
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			return fmt.Errorf("%w (%s)", err, bytes.TrimSpace(out))
+		}
+		return nil
+	}
+	if len(servers) == 0 {
+		return fmt.Errorf("need at least one DNS server")
+	}
+	var quoted []string
+	for _, s := range servers {
+		quoted = append(quoted, `"`+s+`"`)
+	}
+	addrList := strings.Join(quoted, ",")
+	script := fmt.Sprintf(`Set-DnsClientServerAddress -InterfaceAlias %q -ServerAddresses @(%s)`, adapter, addrList)
+	cmd := exec.Command("powershell", "-NoProfile", "-NonInteractive", "-Command", script)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("%w (%s)", err, bytes.TrimSpace(out))
 	}
 	return nil
 }
