@@ -49,6 +49,7 @@ export default function App() {
   const [privacy, setPrivacy] = useState<PrivacyData | null>(null)
   const [privacyApps, setPrivacyApps] = useState<AppPrivacyStats[]>([])
   const [blockingDomain, setBlockingDomain] = useState<string | null>(null)
+  const [showOnlyTrackers, setShowOnlyTrackers] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
   const load = useCallback(async () => {
@@ -313,6 +314,22 @@ export default function App() {
 
           <Section title="Последние запросы">
             <Card variant="default" className="nekkus-glass-card gate-card gate-queries-card">
+              <div className="gate-queries-toolbar">
+                <label className="gate-queries-filter">
+                  <input
+                    type="checkbox"
+                    checked={showOnlyTrackers}
+                    onChange={(e) => setShowOnlyTrackers(e.target.checked)}
+                    aria-label="Показать только запросы к трекерам"
+                  />
+                  <span>Только трекеры</span>
+                </label>
+                {showOnlyTrackers && (
+                  <span className="gate-queries-filter-hint">
+                    {queries.filter((q) => q.is_tracker).length} из {queries.length}
+                  </span>
+                )}
+              </div>
               <div className="gate-queries-table-wrap">
                 <table className="gate-queries-table" role="grid">
                   <thead>
@@ -320,25 +337,45 @@ export default function App() {
                       <th scope="col">Время</th>
                       <th scope="col">Домен</th>
                       <th scope="col">Тип</th>
+                      <th scope="col">Трекер</th>
+                      <th scope="col">Приложение</th>
                       <th scope="col">Статус</th>
                       <th scope="col" aria-label="Действия" />
                     </tr>
                   </thead>
                   <tbody>
-                    {queries.length === 0 ? (
-                      <tr>
-                        <td colSpan={5} className="gate-queries-empty">
-                          Нет записей. Включите фильтр и откройте сайты — запросы появятся здесь.
-                        </td>
-                      </tr>
-                    ) : (
-                      queries.map((q, i) => (
+                    {(() => {
+                      const filtered = showOnlyTrackers ? queries.filter((q) => q.is_tracker) : queries;
+                      if (filtered.length === 0) {
+                        return (
+                          <tr>
+                            <td colSpan={7} className="gate-queries-empty">
+                              {showOnlyTrackers
+                                ? 'Нет запросов к трекерам в последних записях. Откройте сайты — трекеры появятся здесь.'
+                                : 'Нет записей. Включите фильтр и откройте сайты — запросы появятся здесь.'}
+                            </td>
+                          </tr>
+                        );
+                      }
+                      return filtered.map((q, i) => (
                         <tr key={`${q.domain}-${q.timestamp}-${i}`}>
                           <td className="gate-queries-time">
                             {q.timestamp ? new Date(q.timestamp).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : '—'}
                           </td>
                           <td className="gate-queries-domain">{q.domain?.replace(/\.$/,'') || '—'}</td>
                           <td className="gate-queries-type">{q.type || '—'}</td>
+                          <td>
+                            {q.is_tracker ? (
+                              <span className="gate-queries-tracker-badge" title="Известный трекер — можно заблокировать">
+                                Трекер
+                              </span>
+                            ) : (
+                              '—'
+                            )}
+                          </td>
+                          <td className="gate-queries-app" title={q.app_name || undefined}>
+                            {q.app_name || '—'}
+                          </td>
                           <td>
                             <span className={`gate-queries-status gate-queries-status--${q.blocked ? 'blocked' : q.cached ? 'cached' : 'allowed'}`}>
                               {q.blocked ? 'Заблокирован' : q.cached ? 'Кэш' : 'Разрешён'}
@@ -356,8 +393,8 @@ export default function App() {
                             </Button>
                           </td>
                         </tr>
-                      ))
-                    )}
+                      ));
+                    })()}
                   </tbody>
                 </table>
               </div>
