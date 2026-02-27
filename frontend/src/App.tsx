@@ -19,6 +19,7 @@ import {
   enableFilter,
   disableFilter,
   blockDomain,
+  installHelper,
   type GateStats,
   type TopBlockedEntry,
   type PortCheck,
@@ -51,6 +52,8 @@ export default function App() {
   const [blockingDomain, setBlockingDomain] = useState<string | null>(null)
   const [showOnlyTrackers, setShowOnlyTrackers] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [helperRunning, setHelperRunning] = useState<boolean | null>(null)
+  const [helperInstalling, setHelperInstalling] = useState(false)
 
   const load = useCallback(async () => {
     try {
@@ -68,6 +71,7 @@ export default function App() {
       setFilterActive(f.active)
       setFilterActiveMode((f.mode === 'hosts' ? 'hosts' : 'dns'))
       setFilterBlocklistCount(f.blocklist_count ?? 0)
+      setHelperRunning(f.helper_running ?? null)
       setPortCheck(pc)
       setPrivacy(pr ?? null)
       setPrivacyApps(Array.isArray(prApps) ? prApps : [])
@@ -105,6 +109,20 @@ export default function App() {
       setFilterBusy(false)
     }
   }, [filterActive, filterBusy])
+
+  const handleInstallHelper = useCallback(async () => {
+    if (helperInstalling) return
+    setHelperInstalling(true)
+    setFilterError(null)
+    try {
+      await installHelper()
+      await load()
+    } catch (e) {
+      setFilterError(e instanceof Error ? e.message : 'Ошибка установки Helper')
+    } finally {
+      setHelperInstalling(false)
+    }
+  }, [load, helperInstalling])
 
   const handleBlockDomain = useCallback(async (domain: string) => {
     const normalized = domain.replace(/\.$/,'').trim().toLowerCase()
@@ -157,8 +175,30 @@ export default function App() {
           description="DNS-блокировка: реклама и трекеры."
         >
           <Section title="DNS-фильтр">
+            {helperRunning === false && (
+              <Card variant="elevated" moduleGlow="gate" className="nekkus-glass-card gate-card gate-helper-setup">
+                <p className="gate-helper-setup-title">Одноразовая настройка</p>
+                <p className="gate-filter-hint">
+                  Gate нужен небольшой фоновый сервис для смены системного DNS. Один раз потребуется подтверждение UAC.
+                </p>
+                <p className="gate-filter-hint">
+                  Сервис «Nekkus Gate Helper»: ~2 MB RAM, автозапуск с Windows, можно удалить через Gate или <code>nekkus-gate-helper.exe --uninstall</code>.
+                </p>
+                <Button
+                  variant="primary"
+                  size="md"
+                  onClick={handleInstallHelper}
+                  disabled={helperInstalling}
+                >
+                  {helperInstalling ? '…' : 'Установить Helper'}
+                </Button>
+              </Card>
+            )}
             <Card variant="elevated" moduleGlow="gate" className="nekkus-glass-card gate-card gate-filter-card">
               <div className="gate-filter-row">
+                {helperRunning === true && (
+                  <span className="gate-helper-badge" role="status">Helper: работает</span>
+                )}
                 <StatusDot
                   status={filterActive ? 'online' : 'offline'}
                   label={
@@ -180,7 +220,9 @@ export default function App() {
                 </Button>
               </div>
               <p className="gate-filter-hint">
-                Запуск от администратора → «Включить» и всё работает (если порт 53 занят, блокировка пойдёт через файл hosts). «Выключить» — всё восстанавливается. При запуске через Hub запустите Hub от администратора, иначе смена DNS не сработает.
+                {helperRunning
+                  ? '«Включить» — DNS на 127.0.0.1 (или через файл hosts, если порт 53 занят). «Выключить» — всё восстанавливается.'
+                  : 'Установите Helper (кнопка выше) — тогда UAC один раз, дальше Gate и Hub работают без админа. Либо запустите Gate от имени администратора.'}
               </p>
               {portCheck && !portCheck.available && !filterActive && (
                 <p className="gate-filter-hint gate-filter-port-hint" role="status">

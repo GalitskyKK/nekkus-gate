@@ -4,12 +4,13 @@ import (
 	"encoding/json"
 	"net"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
 
 	coreserver "github.com/GalitskyKK/nekkus-core/pkg/server"
-	"os"
 
 	"github.com/GalitskyKK/nekkus-gate/internal/blocklist"
 	"github.com/GalitskyKK/nekkus-gate/internal/hostsfilter"
@@ -186,17 +187,18 @@ func RegisterRoutes(srv *coreserver.Server, st *stats.Stats, bl *blocklist.Block
 		if runner != nil {
 			port = runner.Port()
 		}
-		writeJSON(w, map[string]interface{}{
+		payload := map[string]interface{}{
 			"active":          active,
 			"mode":            mode,
 			"port":            port,
 			"blocklist_count": bl.Count(),
-		}, http.StatusOK)
+		}
+		payload["helper_running"] = platform.IsHelperRunning()
+		writeJSON(w, payload, http.StatusOK)
 	})
 
 	srv.Mux.HandleFunc("POST /api/filter/enable", func(w http.ResponseWriter, _ *http.Request) {
 		setCORS(w)
-		// Уже включено — не запускать netsh/PowerShell повторно (нет моргания окон).
 		if sysdns.HasBackup(dataDir) {
 			state, _ := sysdns.LoadFromFile(dataDir)
 			mode := sysdns.ModeDNS
@@ -206,15 +208,37 @@ func RegisterRoutes(srv *coreserver.Server, st *stats.Stats, bl *blocklist.Block
 			writeJSON(w, map[string]interface{}{"ok": true, "active": true, "mode": mode}, http.StatusOK)
 			return
 		}
-		// Пробуем порт 53. Если свободен — режим DNS (системный DNS → 127.0.0.1, Gate на 53).
-		// Если занят — режим hosts: дописываем блок-лист в hosts, ничего не останавливаем.
+		useHelper := platform.IsHelperRunning()
+
 		if err := tryListenUDP53(); err == nil {
+			if useHelper {
+				state, err := sysdns.GetCurrent()
+				if err != nil {
+					writeJSON(w, map[string]string{"error": "получить текущий DNS: " + err.Error()}, http.StatusInternalServerError)
+					return
+				}
+				if err := platform.HelperSetDNS("127.0.0.1"); err != nil {
+					writeJSON(w, map[string]string{"error": err.Error()}, http.StatusInternalServerError)
+					return
+				}
+				state.Mode = sysdns.ModeDNS
+				if err := sysdns.SaveToFile(dataDir, state); err != nil {
+					_ = platform.HelperRestoreDNS(state.Adapters, state.WasDHCP, state.Servers)
+					writeJSON(w, map[string]string{"error": err.Error()}, http.StatusInternalServerError)
+					return
+				}
+				_ = platform.HelperFlushDNS()
+				if runner != nil {
+					runner.Restart(53)
+				}
+				_ = recovery.Lock(dataDir)
+				writeJSON(w, map[string]interface{}{"ok": true, "active": true, "mode": sysdns.ModeDNS}, http.StatusOK)
+				return
+			}
 			if !platform.IsAdmin() {
-				msg := "Для смены системного DNS нужны права администратора. "
+				msg := "Для смены системного DNS нужны права администратора. Установите Nekkus Gate Helper (кнопка «Установить Helper») — тогда UAC понадобится один раз."
 				if os.Getenv("NEKKUS_HUB_ADDR") != "" {
-					msg += "Gate запущен из Hub. Запустите Nekkus Hub от имени администратора (ПКМ по ярлыку → «Запуск от имени администратора»), затем остановите Gate в Hub и запустите снова. Либо один раз запустите Nekkus Gate отдельно от имени администратора (ПКМ по nekkus-gate.exe → «Запуск от имени администратора»), нажмите «Включить» — настройки сохранятся, при следующих запусках из Hub фильтр будет уже включён."
-				} else {
-					msg += "ПКМ по программе → «Запуск от имени администратора», затем снова нажмите «Включить»."
+					msg = "Gate запущен из Hub. Установите Helper (один раз, с UAC) или запустите Hub от имени администратора."
 				}
 				writeJSON(w, map[string]string{"error": msg}, http.StatusForbidden)
 				return
@@ -224,11 +248,7 @@ func RegisterRoutes(srv *coreserver.Server, st *stats.Stats, bl *blocklist.Block
 				if strings.Contains(strings.ToLower(msg), "access is denied") ||
 					strings.Contains(strings.ToLower(msg), "отказано в доступе") ||
 					strings.Contains(strings.ToLower(msg), "denied") {
-					if os.Getenv("NEKKUS_HUB_ADDR") != "" {
-						msg = "Недостаточно прав. Gate запущен из Hub. Запустите Nekkus Hub от имени администратора (ПКМ → «Запуск от имени администратора»), остановите и снова запустите Gate в Hub. Либо один раз запустите Nekkus Gate отдельно от имени администратора и нажмите «Включить» — настройки сохранятся в %APPDATA%\\nekkus\\gate."
-					} else {
-						msg = "Запустите Gate от имени администратора: ПКМ по программе → «Запуск от имени администратора», затем снова нажмите «Включить»."
-					}
+					msg = "Недостаточно прав. Установите Nekkus Gate Helper или запустите Gate от имени администратора."
 				}
 				writeJSON(w, map[string]string{"error": msg}, http.StatusInternalServerError)
 				return
@@ -240,19 +260,40 @@ func RegisterRoutes(srv *coreserver.Server, st *stats.Stats, bl *blocklist.Block
 			writeJSON(w, map[string]interface{}{"ok": true, "active": true, "mode": sysdns.ModeDNS}, http.StatusOK)
 			return
 		}
-		// Порт 53 занят — включаем через файл hosts (без переключения DNS, ничего не останавливаем).
+
+		// Порт 53 занят — режим hosts.
 		domains := bl.All()
+		if useHelper {
+			hostsPath := hostsfilter.Path()
+			hostsData, err := os.ReadFile(hostsPath)
+			if err != nil {
+				writeJSON(w, map[string]string{"error": "прочитать hosts: " + err.Error()}, http.StatusInternalServerError)
+				return
+			}
+			backupPath := filepath.Join(dataDir, hostsfilter.HostsBackupName())
+			if err := os.WriteFile(backupPath, hostsData, 0644); err != nil {
+				writeJSON(w, map[string]string{"error": err.Error()}, http.StatusInternalServerError)
+				return
+			}
+			newContent := hostsfilter.BuildHostsContent(hostsData, domains)
+			if err := platform.HelperWriteHosts(newContent); err != nil {
+				writeJSON(w, map[string]string{"error": err.Error()}, http.StatusInternalServerError)
+				return
+			}
+			if err := sysdns.SaveStateHostsMode(dataDir); err != nil {
+				writeJSON(w, map[string]string{"error": err.Error()}, http.StatusInternalServerError)
+				return
+			}
+			writeJSON(w, map[string]interface{}{"ok": true, "active": true, "mode": sysdns.ModeHosts}, http.StatusOK)
+			return
+		}
 		if err := hostsfilter.Enable(dataDir, domains); err != nil {
 			msg := err.Error()
 			if strings.Contains(strings.ToLower(msg), "access is denied") ||
 				strings.Contains(strings.ToLower(msg), "отказано") ||
 				strings.Contains(strings.ToLower(msg), "denied") ||
 				strings.Contains(strings.ToLower(msg), "permission") {
-				if os.Getenv("NEKKUS_HUB_ADDR") != "" {
-					msg = "Недостаточно прав для записи в hosts. Запустите Hub от имени администратора и перезапустите Gate в Hub, либо один раз включите фильтр в отдельном окне Gate (от имени администратора)."
-				} else {
-					msg = "Запустите Gate от имени администратора, затем снова нажмите «Включить»."
-				}
+				msg = "Недостаточно прав для записи в hosts. Установите Nekkus Gate Helper или запустите Gate от имени администратора."
 			}
 			writeJSON(w, map[string]string{"error": msg}, http.StatusInternalServerError)
 			return
@@ -264,14 +305,40 @@ func RegisterRoutes(srv *coreserver.Server, st *stats.Stats, bl *blocklist.Block
 		writeJSON(w, map[string]interface{}{"ok": true, "active": true, "mode": sysdns.ModeHosts}, http.StatusOK)
 	})
 
+	srv.Mux.HandleFunc("POST /api/helper/install", func(w http.ResponseWriter, _ *http.Request) {
+		setCORS(w)
+		if err := platform.InstallHelper(); err != nil {
+			writeJSON(w, map[string]string{"error": err.Error()}, http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, map[string]interface{}{"ok": true}, http.StatusOK)
+	})
+
 	srv.Mux.HandleFunc("POST /api/filter/disable", func(w http.ResponseWriter, _ *http.Request) {
 		setCORS(w)
 		state, _ := sysdns.LoadFromFile(dataDir)
+		useHelper := platform.IsHelperRunning()
+
 		if state != nil && state.Mode == sysdns.ModeHosts {
-			if err := hostsfilter.Disable(dataDir); err != nil {
+			if useHelper {
+				backupPath := filepath.Join(dataDir, hostsfilter.HostsBackupName())
+				backupData, err := os.ReadFile(backupPath)
+				if err != nil {
+					writeJSON(w, map[string]string{"error": err.Error()}, http.StatusInternalServerError)
+					return
+				}
+				if err := platform.HelperWriteHosts(string(backupData)); err != nil {
+					writeJSON(w, map[string]string{"error": err.Error()}, http.StatusInternalServerError)
+					return
+				}
+				_ = os.Remove(backupPath)
+			} else if err := hostsfilter.Disable(dataDir); err != nil {
 				writeJSON(w, map[string]string{"error": err.Error()}, http.StatusInternalServerError)
 				return
 			}
+		}
+		if state != nil && state.Mode == sysdns.ModeDNS && useHelper {
+			_ = platform.HelperRestoreDNS(state.Adapters, state.WasDHCP, state.Servers)
 		}
 		if err := sysdns.Disable(dataDir); err != nil {
 			writeJSON(w, map[string]string{"error": err.Error()}, http.StatusInternalServerError)

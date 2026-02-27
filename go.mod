@@ -11,6 +11,7 @@ require (
 require (
 	fyne.io/systray v1.11.0 // indirect
 	git.sr.ht/~jackmordaunt/go-toast v1.1.2 // indirect
+	github.com/Microsoft/go-winio v0.6.2 // indirect
 	github.com/esiqveland/notify v0.13.3 // indirect
 	github.com/gen2brain/beeep v0.11.2 // indirect
 	github.com/go-ole/go-ole v1.3.0 // indirect

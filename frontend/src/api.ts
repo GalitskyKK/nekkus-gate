@@ -34,6 +34,7 @@ export interface FilterStatus {
   mode: FilterMode
   port: number
   blocklist_count?: number
+  helper_running?: boolean
 }
 
 export async function fetchFilterStatus(): Promise<FilterStatus> {
@@ -51,6 +52,13 @@ export async function enableFilter(): Promise<{ ok: boolean; active: boolean; mo
 
 export async function disableFilter(): Promise<{ ok: boolean; active: boolean }> {
   const res = await fetch(`${BASE}/api/filter/disable`, { method: 'POST' })
+  const data = await res.json()
+  if (!res.ok) throw new Error((data as { error?: string }).error || res.statusText)
+  return data
+}
+
+export async function installHelper(): Promise<{ ok: boolean }> {
+  const res = await fetch(`${BASE}/api/helper/install`, { method: 'POST' })
   const data = await res.json()
   if (!res.ok) throw new Error((data as { error?: string }).error || res.statusText)
   return data

@@ -13,6 +13,49 @@ const (
 	gateMarker      = "# Nekkus Gate blocklist"
 )
 
+// Path возвращает путь к системному файлу hosts.
+func Path() string {
+	return hostsPath()
+}
+
+// HostsBackupName возвращает имя файла бэкапа hosts в dataDir.
+func HostsBackupName() string {
+	return hostsBackupName
+}
+
+// BuildHostsContent формирует содержимое hosts: currentData + блокировка domains (0.0.0.0 domain).
+func BuildHostsContent(currentData []byte, domains []string) string {
+	var sb strings.Builder
+	sb.Write(currentData)
+	if len(currentData) > 0 && currentData[len(currentData)-1] != '\n' {
+		sb.WriteByte('\n')
+	}
+	sb.WriteString("\n")
+	sb.WriteString(gateMarker)
+	sb.WriteString("\n")
+	written := make(map[string]struct{})
+	for _, d := range domains {
+		d = strings.TrimSpace(strings.ToLower(d))
+		if d == "" {
+			continue
+		}
+		sb.WriteString("0.0.0.0 ")
+		sb.WriteString(d)
+		sb.WriteString("\n")
+		written[d] = struct{}{}
+		if !strings.HasPrefix(d, "www.") {
+			www := "www." + d
+			if _, ok := written[www]; !ok {
+				sb.WriteString("0.0.0.0 ")
+				sb.WriteString(www)
+				sb.WriteString("\n")
+				written[www] = struct{}{}
+			}
+		}
+	}
+	return sb.String()
+}
+
 func hostsPath() string {
 	if runtime.GOOS == "windows" {
 		sysRoot := os.Getenv("SystemRoot")

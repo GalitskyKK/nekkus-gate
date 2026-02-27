@@ -13,6 +13,17 @@ builds:
     ldflags:
       - -H windowsgui
 
+  # Привилегированный сервис для смены DNS без UAC при каждом запуске (только Windows).
+  - id: nekkus-gate-helper
+    main: ./cmd/helper
+    binary: nekkus-gate-helper
+    goos:
+      - windows
+    goarch:
+      - amd64
+    env:
+      - CGO_ENABLED=1
+
 archives:
   - id: default
     format: zip

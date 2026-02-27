@@ -45,6 +45,30 @@ body {
   margin-bottom: 0;
 }
 
+.gate-helper-setup {
+  margin-bottom: 16px;
+}
+.gate-helper-setup .gate-helper-setup-title {
+  font-weight: 600;
+  margin: 0 0 8px;
+  font-size: 14px;
+}
+.gate-helper-setup .gate-filter-hint {
+  margin-top: 6px;
+}
+.gate-helper-setup .gate-filter-hint + .gate-filter-hint {
+  margin-top: 4px;
+}
+.gate-helper-setup .nekkus-button {
+  margin-top: 12px;
+}
+
+.gate-helper-badge {
+  font-size: 11px;
+  color: var(--nekkus-muted, #64748b);
+  margin-right: 8px;
+}
+
 .gate-filter-row {
   display: flex;
   align-items: center;
