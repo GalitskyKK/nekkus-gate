@@ -20,16 +20,24 @@ var (
 )
 
 // InstallHelper запускает nekkus-gate-helper.exe --install с запросом UAC (runas).
-// Ожидается, что nekkus-gate-helper.exe лежит рядом с исполняемым файлом Gate
-// или в текущей директории. Возвращает ошибку при неудачном запуске (не ждёт завершения установки).
+// Ожидается, что nekkus-gate-helper.exe лежит рядом с исполняемым файлом Gate.
 func InstallHelper() error {
 	helperPath, err := findHelperExe()
 	if err != nil {
 		return err
 	}
-	dir := filepath.Dir(helperPath)
+	absPath, err := filepath.Abs(helperPath)
+	if err != nil {
+		absPath = helperPath
+	}
+	dir := filepath.Dir(absPath)
+	// Путь с пробелами передаём в кавычках, иначе runas может вернуть код 5.
+	lpFile := absPath
+	if containsSpace(absPath) {
+		lpFile = `"` + absPath + `"`
+	}
 	verb, _ := syscall.UTF16PtrFromString("runas")
-	file, _ := syscall.UTF16PtrFromString(helperPath)
+	file, _ := syscall.UTF16PtrFromString(lpFile)
 	params, _ := syscall.UTF16PtrFromString("--install")
 	cwd, _ := syscall.UTF16PtrFromString(dir)
 	ret, _, _ := procShellExecuteW.Call(
@@ -40,11 +48,41 @@ func InstallHelper() error {
 		uintptr(unsafe.Pointer(cwd)),
 		swHide,
 	)
-	// ShellExecute returns value > 32 on success
 	if ret <= 32 {
-		return fmt.Errorf("ShellExecute failed: code %d", ret)
+		return fmt.Errorf("%s (код %d). %s", shellExecuteErrMessage(ret), int32(ret), shellExecuteHint(ret))
 	}
 	return nil
+}
+
+func containsSpace(s string) bool {
+	for _, r := range s {
+		if r == ' ' || r == '\t' {
+			return true
+		}
+	}
+	return false
+}
+
+func shellExecuteErrMessage(ret uintptr) string {
+	switch int32(ret) {
+	case 0:
+		return "Нехватка ресурсов"
+	case 2:
+		return "Файл не найден — убедитесь, что nekkus-gate-helper.exe лежит рядом с nekkus-gate.exe"
+	case 5:
+		return "Отказано в доступе"
+	case 31:
+		return "Нет ассоциации для запуска"
+	default:
+		return "Не удалось запустить установку Helper"
+	}
+}
+
+func shellExecuteHint(ret uintptr) string {
+	if int32(ret) == 5 {
+		return "Подтвердите UAC (окно «Разрешить изменения»). Если папка на сетевом диске — скопируйте Gate в локальный диск. Или один раз запустите Gate от имени администратора и нажмите «Установить Helper» снова."
+	}
+	return "Проверьте, что nekkus-gate-helper.exe в той же папке, что и nekkus-gate.exe."
 }
 
 // HelperExePath возвращает путь к nekkus-gate-helper.exe для отображения в UI.
