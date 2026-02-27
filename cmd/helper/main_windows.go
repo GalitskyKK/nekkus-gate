@@ -4,6 +4,7 @@ package main
 
 import (
 	"flag"
+	"fmt"
 	"io"
 	"log"
 	"os"
@@ -52,34 +53,39 @@ func main() {
 func installService() error {
 	exePath, err := os.Executable()
 	if err != nil {
-		return err
+		return fmt.Errorf("executable path: %w", err)
 	}
-	// Копируем helper в %ProgramData%\Nekkus\, чтобы сервис (LocalSystem) всегда видел exe.
-	// Иначе при установке с E:\ или сетевого диска SCM при старте сервиса выдаёт "file not found".
+	exePath = filepath.Clean(exePath)
+
+	// Копируем helper в C:\ProgramData\Nekkus\, чтобы сервис (LocalSystem) всегда видел exe.
 	targetPath, err := copyToProgramData(exePath)
 	if err != nil {
-		return err
+		return fmt.Errorf("copy to ProgramData: %w", err)
 	}
+	targetPath = filepath.Clean(targetPath)
+
 	m, err := connectSCM()
 	if err != nil {
-		return err
+		return fmt.Errorf("connect SCM: %w", err)
 	}
 	defer m.Disconnect()
 
+	// Если сервис уже есть (со старым путём, например E:\) — удаляем и создаём заново с путём на C:.
+	if s, oerr := m.OpenService(serviceName); oerr == nil {
+		_, _ = s.Control(svc.Stop)
+		_ = s.Delete()
+		s.Close()
+	}
+
 	s, err := m.CreateService(serviceName, targetPath, serviceConfig(), "-run")
 	if err != nil {
-		if isAlreadyExists(err) {
-			s, oerr := m.OpenService(serviceName)
-			if oerr != nil {
-				return oerr
-			}
-			defer s.Close()
-			return s.Start()
-		}
-		return err
+		return fmt.Errorf("CreateService: %w", err)
 	}
 	defer s.Close()
-	return s.Start()
+	if err := s.Start(); err != nil {
+		return fmt.Errorf("Start service: %w", err)
+	}
+	return nil
 }
 
 // copyToProgramData копирует текущий exe в C:\ProgramData\Nekkus\nekkus-gate-helper.exe и возвращает этот путь.
@@ -90,26 +96,26 @@ func copyToProgramData(sourceExe string) (string, error) {
 	}
 	dir := filepath.Join(programData, helperSubdir)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return "", err
+		return "", fmt.Errorf("mkdir %s: %w", dir, err)
 	}
 	dst := filepath.Join(dir, helperExeName)
 	srcFile, err := os.Open(sourceExe)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("open source %s: %w", sourceExe, err)
 	}
 	defer srcFile.Close()
 	dstFile, err := os.Create(dst)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("create %s: %w", dst, err)
 	}
 	defer dstFile.Close()
 	if _, err := io.Copy(dstFile, srcFile); err != nil {
 		os.Remove(dst)
-		return "", err
+		return "", fmt.Errorf("copy: %w", err)
 	}
 	if err := dstFile.Sync(); err != nil {
 		os.Remove(dst)
-		return "", err
+		return "", fmt.Errorf("sync: %w", err)
 	}
 	return dst, nil
 }
