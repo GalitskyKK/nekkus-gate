@@ -85,7 +85,7 @@ func shellExecuteErrMessage(ret uintptr) string {
 
 func shellExecuteHint(ret uintptr) string {
 	if int32(ret) == 5 {
-		return "UAC не сработал (часто при запуске Gate от администратора или при отключённом UAC)."
+		return "UAC не сработал. Если Helper уже установлен, но Gate его не видит — переустановите из cmd (от админа): cd /d \"папка_с_Gate\", затем nekkus-gate-helper.exe --install"
 	}
 	return "Проверьте, что nekkus-gate-helper.exe в той же папке, что и nekkus-gate.exe."
 }

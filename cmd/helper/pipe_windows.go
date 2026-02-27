@@ -38,8 +38,10 @@ var allowedCommands = map[string]bool{
 }
 
 func startPipeServer(stopCh <-chan struct{}) {
+	// WD = World (все процессы), чтобы процесс Gate от обычного пользователя мог подключаться к сервису (LocalSystem).
+	// BU иногда недостаточен для сессии пользователя.
 	cfg := &winio.PipeConfig{
-		SecurityDescriptor: "D:P(A;;GA;;;BU)",
+		SecurityDescriptor: "D:P(A;;GA;;;WD)",
 		MessageMode:        false,
 		InputBufferSize:    4096,
 		OutputBufferSize:   4096,
