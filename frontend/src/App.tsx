@@ -61,7 +61,7 @@ export default function App() {
       const [s, t, f, pc, pr, prApps] = await Promise.all([
         fetchStats(),
         fetchTopBlocked(10).catch(() => []),
-        fetchFilterStatus().catch(() => ({ active: false, mode: 'dns' as const, port: 5354, blocklist_count: 0 })),
+        fetchFilterStatus().catch(() => ({ active: false, mode: 'dns' as const, port: 5354, blocklist_count: 0, helper_running: false })),
         fetchPortCheck().catch(() => ({ available: true })),
         fetchPrivacy().catch(() => null),
         fetchPrivacyApps().catch(() => []),
