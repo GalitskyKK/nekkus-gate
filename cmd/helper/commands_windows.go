@@ -147,6 +147,15 @@ func hostsPath() string {
 }
 
 func getActiveAdapters() []string {
+	names := getActiveAdaptersFromShowInterface()
+	if len(names) == 0 {
+		names = getActiveAdaptersFromShowConfig()
+	}
+	return names
+}
+
+// getActiveAdaptersFromShowInterface парсит "netsh interface show interface" (Connected/Подключено).
+func getActiveAdaptersFromShowInterface() []string {
 	cmd := exec.Command("netsh", "interface", "show", "interface")
 	hideWindow(cmd)
 	out, err := cmd.Output()
@@ -158,13 +167,41 @@ func getActiveAdapters() []string {
 	var names []string
 	for _, line := range lines {
 		lower := strings.ToLower(line)
-		if !strings.Contains(lower, "connected") && !strings.Contains(lower, "подключено") {
+		if !strings.Contains(lower, "connected") && !strings.Contains(lower, "подключено") && !strings.Contains(lower, "verbunden") {
 			continue
 		}
 		parts := regexp.MustCompile(`\s{2,}`).Split(strings.TrimSpace(line), -1)
 		if len(parts) >= 4 {
 			name := strings.TrimSpace(strings.Join(parts[3:], " "))
 			if name != "" && !strings.Contains(strings.ToLower(name), "loopback") {
+				names = append(names, name)
+			}
+		}
+	}
+	return names
+}
+
+// getActiveAdaptersFromShowConfig — запасной вариант: имена из "netsh interface ipv4 show config" (Configuration for interface "...").
+func getActiveAdaptersFromShowConfig() []string {
+	cmd := exec.Command("netsh", "interface", "ipv4", "show", "config")
+	hideWindow(cmd)
+	out, err := cmd.Output()
+	if err != nil {
+		return nil
+	}
+	out = bytes.ReplaceAll(out, []byte("\r\n"), []byte("\n"))
+	// Configuration for interface "Ethernet" / Конфигурация интерфейса "Ethernet"
+	re := regexp.MustCompile(`(?m)^(?:Configuration for interface|Конфигурация (?:(?:для )?интерфейса|интерфейса))\s*"([^"]+)"`)
+	matches := re.FindAllSubmatch(out, -1)
+	var names []string
+	seen := make(map[string]bool)
+	for _, m := range matches {
+		if len(m) >= 2 {
+			name := string(m[2])
+			name = strings.TrimSpace(name)
+			lower := strings.ToLower(name)
+			if name != "" && !strings.Contains(lower, "loopback") && !seen[name] {
+				seen[name] = true
 				names = append(names, name)
 			}
 		}

@@ -5,7 +5,9 @@ package platform
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"unsafe"
 )
@@ -50,6 +52,12 @@ func InstallHelper() error {
 		swShowNormal,
 	)
 	if ret <= 32 {
+		if int32(ret) == 5 {
+			// Запасной вариант: VBS с ShellExecute runas иногда вызывает UAC там, где прямой вызов — нет.
+			if tryInstallViaVBS(absPath, dir) {
+				return nil
+			}
+		}
 		hint := shellExecuteHint(ret)
 		if int32(ret) == 5 {
 			hint = fmt.Sprintf("%s Установите вручную: откройте cmd от имени администратора, выполните: cd /d %q и затем nekkus-gate-helper.exe --install", hint, dir)
@@ -57,6 +65,25 @@ func InstallHelper() error {
 		return fmt.Errorf("%s (код %d). %s", shellExecuteErrMessage(ret), int32(ret), hint)
 	}
 	return nil
+}
+
+// tryInstallViaVBS создаёт временный .vbs с ShellExecute runas и запускает его. Возвращает true, если скрипт запущен.
+func tryInstallViaVBS(helperPath, workDir string) bool {
+	script := fmt.Sprintf("Set o = CreateObject(\"Shell.Application\")\no.ShellExecute \"%s\", \"--install\", \"%s\", \"runas\", 1\n",
+		strings.ReplaceAll(helperPath, `"`, `""`),
+		strings.ReplaceAll(workDir, `"`, `""`))
+	tmpDir := os.TempDir()
+	vbsPath := filepath.Join(tmpDir, "nekkus-gate-helper-install.vbs")
+	if err := os.WriteFile(vbsPath, []byte(script), 0600); err != nil {
+		return false
+	}
+	defer os.Remove(vbsPath)
+	cmd := exec.Command("wscript.exe", "//B", vbsPath)
+	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+	if err := cmd.Start(); err != nil {
+		return false
+	}
+	return true
 }
 
 func containsSpace(s string) bool {
