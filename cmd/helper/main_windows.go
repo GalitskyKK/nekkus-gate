@@ -6,6 +6,7 @@ import (
 	"flag"
 	"log"
 	"os"
+	"strings"
 
 	"golang.org/x/sys/windows/svc"
 )
@@ -57,10 +58,29 @@ func installService() error {
 
 	s, err := m.CreateService(serviceName, exePath, serviceConfig(), "-run")
 	if err != nil {
+		if isAlreadyExists(err) {
+			// Сервис уже зарегистрирован (например, после повторного клика «Установить Helper»).
+			s, oerr := m.OpenService(serviceName)
+			if oerr != nil {
+				return oerr
+			}
+			defer s.Close()
+			return s.Start()
+		}
 		return err
 	}
 	defer s.Close()
 	return s.Start()
+}
+
+func isAlreadyExists(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "already exists") ||
+		strings.Contains(msg, "уже существует") ||
+		strings.Contains(msg, "уже зарегистрирован")
 }
 
 func uninstallService() error {

@@ -116,6 +116,17 @@ export default function App() {
     setFilterError(null)
     try {
       await installHelper()
+      // Сервис поднимается с задержкой; опрашиваем статус до ~12 сек.
+      for (let attempt = 0; attempt < 8; attempt++) {
+        await new Promise((r) => setTimeout(r, 1500))
+        try {
+          const status = await fetchFilterStatus()
+          setHelperRunning(status.helper_running ?? null)
+          if (status.helper_running) break
+        } catch {
+          /* игнорируем ошибки опроса */
+        }
+      }
       await load()
     } catch (e) {
       setFilterError(e instanceof Error ? e.message : 'Ошибка установки Helper')
