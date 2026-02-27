@@ -22,11 +22,7 @@ var (
 
 // InstallHelper запускает nekkus-gate-helper.exe --install с запросом UAC (runas).
 // Ожидается, что nekkus-gate-helper.exe лежит рядом с исполняемым файлом Gate.
-// Важно: при запуске Gate от администратора UAC не появится и будет код 5 — нужно запускать Gate без админа.
 func InstallHelper() error {
-	if IsAdmin() {
-		return fmt.Errorf("Gate запущен от администратора. При этом UAC не показывается. Закройте Gate, запустите его обычным способом (без «Запуск от имени администратора») и снова нажмите «Установить Helper» — тогда появится запрос UAC")
-	}
 	helperPath, err := findHelperExe()
 	if err != nil {
 		return err
@@ -54,7 +50,11 @@ func InstallHelper() error {
 		swShowNormal,
 	)
 	if ret <= 32 {
-		return fmt.Errorf("%s (код %d). %s", shellExecuteErrMessage(ret), int32(ret), shellExecuteHint(ret))
+		hint := shellExecuteHint(ret)
+		if int32(ret) == 5 {
+			hint = fmt.Sprintf("%s Установите вручную: откройте cmd от имени администратора, выполните: cd /d %q и затем nekkus-gate-helper.exe --install", hint, dir)
+		}
+		return fmt.Errorf("%s (код %d). %s", shellExecuteErrMessage(ret), int32(ret), hint)
 	}
 	return nil
 }
@@ -85,7 +85,7 @@ func shellExecuteErrMessage(ret uintptr) string {
 
 func shellExecuteHint(ret uintptr) string {
 	if int32(ret) == 5 {
-		return "Не запускайте Gate от администратора — тогда UAC не появится. Закройте Gate, запустите обычным способом (двойной клик) и нажмите «Установить Helper» снова. Если папка на сетевом диске — скопируйте в локальную."
+		return "UAC не сработал (часто при запуске Gate от администратора или при отключённом UAC)."
 	}
 	return "Проверьте, что nekkus-gate-helper.exe в той же папке, что и nekkus-gate.exe."
 }
