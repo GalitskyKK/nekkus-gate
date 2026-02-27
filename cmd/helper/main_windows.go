@@ -4,16 +4,20 @@ package main
 
 import (
 	"flag"
+	"io"
 	"log"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"golang.org/x/sys/windows/svc"
 )
 
 const (
-	serviceName = "NekkusGateHelper"
-	serviceDesc = "Nekkus Gate DNS Helper — manages system DNS settings"
+	serviceName   = "NekkusGateHelper"
+	serviceDesc   = "Nekkus Gate DNS Helper — manages system DNS settings"
+	helperSubdir  = "Nekkus"
+	helperExeName = "nekkus-gate-helper.exe"
 )
 
 var (
@@ -50,16 +54,21 @@ func installService() error {
 	if err != nil {
 		return err
 	}
+	// Копируем helper в %ProgramData%\Nekkus\, чтобы сервис (LocalSystem) всегда видел exe.
+	// Иначе при установке с E:\ или сетевого диска SCM при старте сервиса выдаёт "file not found".
+	targetPath, err := copyToProgramData(exePath)
+	if err != nil {
+		return err
+	}
 	m, err := connectSCM()
 	if err != nil {
 		return err
 	}
 	defer m.Disconnect()
 
-	s, err := m.CreateService(serviceName, exePath, serviceConfig(), "-run")
+	s, err := m.CreateService(serviceName, targetPath, serviceConfig(), "-run")
 	if err != nil {
 		if isAlreadyExists(err) {
-			// Сервис уже зарегистрирован (например, после повторного клика «Установить Helper»).
 			s, oerr := m.OpenService(serviceName)
 			if oerr != nil {
 				return oerr
@@ -71,6 +80,38 @@ func installService() error {
 	}
 	defer s.Close()
 	return s.Start()
+}
+
+// copyToProgramData копирует текущий exe в C:\ProgramData\Nekkus\nekkus-gate-helper.exe и возвращает этот путь.
+func copyToProgramData(sourceExe string) (string, error) {
+	programData := os.Getenv("ProgramData")
+	if programData == "" {
+		programData = "C:\\ProgramData"
+	}
+	dir := filepath.Join(programData, helperSubdir)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return "", err
+	}
+	dst := filepath.Join(dir, helperExeName)
+	srcFile, err := os.Open(sourceExe)
+	if err != nil {
+		return "", err
+	}
+	defer srcFile.Close()
+	dstFile, err := os.Create(dst)
+	if err != nil {
+		return "", err
+	}
+	defer dstFile.Close()
+	if _, err := io.Copy(dstFile, srcFile); err != nil {
+		os.Remove(dst)
+		return "", err
+	}
+	if err := dstFile.Sync(); err != nil {
+		os.Remove(dst)
+		return "", err
+	}
+	return dst, nil
 }
 
 func isAlreadyExists(err error) bool {
